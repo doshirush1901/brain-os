@@ -1,0 +1,40 @@
+{
+  "description": "PUBLIC DEMO DATA — synthetic Acme Services Inc. CRM seed.",
+  "companies": [
+    {
+      "name": "Northwind Components",
+      "domain": "northwind-demo.example",
+      "industry": "Industrial components",
+      "stage": "qualified"
+    },
+    {
+      "name": "Summit Logistics",
+      "domain": "summit-demo.example",
+      "industry": "3PL",
+      "stage": "lead"
+    }
+  ],
+  "contacts": [
+    {
+      "name": "Jordan Lee",
+      "email": "jordan.lee@northwind-demo.example",
+      "company": "Northwind Components",
+      "title": "VP Operations"
+    },
+    {
+      "name": "Sam Ortiz",
+      "email": "sam.ortiz@summit-demo.example",
+      "company": "Summit Logistics",
+      "title": "Director IT"
+    }
+  ],
+  "deals": [
+    {
+      "title": "Northwind — platform rollout",
+      "company": "Northwind Components",
+      "stage": "proposal",
+      "value_usd": 85000,
+      "next_step": "Send SOW draft for review"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "description": "PUBLIC DEMO DATA — synthetic Acme proof registry for outbound drafts.",
+  "artifacts": [
+    {
+      "id": "acme-case-study-ops",
+      "title": "Acme — demo operations case study",
+      "url": "https://example.com/acme/case-study-ops",
+      "tags": ["demo", "operations", "B2B"],
+      "allowed_claims": [
+        "Demo only: Acme publishes a generic operations efficiency case study on example.com."
+      ],
+      "sensitivity": {
+        "customer_name_public_ok": true,
+        "notes": "Synthetic — not a real customer reference."
+      },
+      "summary": "Placeholder for Calliope-style draft citation tests."
+    }
+  ]
+}

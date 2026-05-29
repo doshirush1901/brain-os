@@ -1,0 +1,8 @@
+# Brain OS export — public guard exemptions (narrow; prefer fixing source).
+skip_paths_prefix:
+  - examples/acme/
+  - prompts/calliope_system.txt
+  - src/brain_os/config.py
+  - src/brain_os/brain/knowledge_graph_text.py
+  - src/brain_os/services/triangulation_gaps.py
+exempt_line_contains: []

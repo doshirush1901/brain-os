@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "brain-os": {
+      "command": "poetry",
+      "args": ["run", "brain-mcp"],
+      "cwd": "${CURSOR_PROJECT_DIR:-.}"
+    }
+  }
+}

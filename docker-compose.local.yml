@@ -1,0 +1,90 @@
+# Local development only. Default passwords and ports match .env.example; change all
+# secrets before any shared or production use. Volumes under ./data/ are gitignored.
+services:
+  # Qdrant: local instance for reliable development and offline use.
+  # Neo4j: local instance below. Default host ports 7475/7688 avoid clashing with another
+  # stack (e.g. another Neo4j on 7474/7687). Set NEO4J_URI=bolt://localhost:7688.
+  # Optional: NEO4J_CLOUD_URI + NEO4J_CLOUD_PASSWORD to mirror writes to Aura.
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.5
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - ./data/qdrant:/qdrant/storage
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:6333/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
+    networks:
+      - ira-network
+
+  neo4j:
+    image: neo4j:5.15.0-community
+    restart: unless-stopped
+    ports:
+      - "7475:7474"
+      - "7688:7687"
+    # Do not set NEO4J_AUTH when ./data/neo4j already has dbms/auth.ini — the image
+    # entrypoint would re-run password init and can fail with "already running (pid:7)".
+    # First boot only: add environment NEO4J_AUTH: neo4j/ira_knowledge_graph then remove it.
+    # If Neo4j won't start ("already running (pid:7)"), recreate the container after stopping it;
+    # see docs/TROUBLESHOOTING.md for stale-volume / pid collision notes.
+    volumes:
+      - ./data/neo4j:/data
+    mem_limit: 2g
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:7474 >/dev/null 2>&1 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
+    networks:
+      - ira-network
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ira
+      POSTGRES_PASSWORD: ira
+      POSTGRES_DB: ira_crm
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ira -d ira_crm"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    networks:
+      - ira-network
+
+  redis:
+    image: redis:7.2-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./data/redis:/data
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - ira-network
+
+networks:
+  ira-network:
+    driver: bridge

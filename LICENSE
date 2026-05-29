@@ -1,0 +1,29 @@
+Business Source License 1.1
+
+Parameters
+
+Licensor:             Brain OS Maintainers
+Licensed Work:        Brain OS (brain-os repository)
+Additional Use Grant: You may use, copy, modify, create derivative works of,
+                      and redistribute the Licensed Work for non-production
+                      purposes, including evaluation, research, and internal
+                      development, subject to the Change License below.
+
+Change Date:          2029-01-01
+
+Change License:       Apache License, Version 2.0
+
+For information about alternative licensing terms (Pro, Appliance, Enterprise),
+contact the Licensor.
+
+---
+
+Full BSL 1.1 text: https://mariadb.com/bsl11/
+
+Community tier (no key): evaluation and development with documented caps
+(500 indexed documents, tiered MCP tool registry). Production deployment,
+team use, appliance resale, and cap removal require a commercial license.
+
+Activate Pro or trial: `brain activate --trial` or `brain activate --key bos_live_...`
+
+See docs/LICENSING.md and LICENSE.md in this repository.
