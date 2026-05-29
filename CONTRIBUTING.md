@@ -13,6 +13,7 @@ Thanks for helping improve the public skeleton.
 2. Run `python scripts/public_repo_guard.py` from repo root.
 3. Keep Community/Pro licensing behavior documented in `docs/LICENSING.md`.
 4. Read [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+5. Read [docs/GIT_AND_AI.md](docs/GIT_AND_AI.md) — Git + AI practices for this repo and forks.
 
 ## Issue labels
 

@@ -134,6 +134,7 @@ poetry run brain ask "Summarize the Acme demo CRM" --json
 | [Product roadmap](docs/BRAIN_OS_PRODUCTIZATION_ROADMAP.md) | Architecture and GTM |
 | [Brand assets](docs/BRAND.md) | Logo, README hero, social preview |
 | [Changelog](CHANGELOG.md) | Release notes |
+| [Git + AI](docs/GIT_AND_AI.md) | Commits, secrets, CI, forks |
 | [Contributing](CONTRIBUTING.md) | PR guidelines · [Code of conduct](CODE_OF_CONDUCT.md) |
 | [Security](SECURITY.md) | Reporting issues |
 
