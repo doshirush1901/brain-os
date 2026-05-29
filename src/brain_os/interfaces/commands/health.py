@@ -16,7 +16,7 @@ err_console = Console(stderr=True)
 
 def version() -> None:
     """Print the Brain OS skeleton version."""
-    console.print("brain-os 0.1.0-skeleton")
+    console.print("brain-os 0.1.0")
 
 
 def health(
