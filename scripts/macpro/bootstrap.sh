@@ -61,5 +61,5 @@ log "Brain OS health check"
 poetry run brain health
 
 log "Bootstrap complete."
-log "Next: copy .mcp.json.example → .cursor/mcp.json and customize cwd."
+log "Next: cp .cursor/mcp.json.example .cursor/mcp.json — see docs/MCP_SETUP.md"
 log "Demo data: examples/acme/ — see examples/acme/journey.md"

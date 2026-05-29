@@ -3,9 +3,9 @@
     "brain-os": {
       "command": "poetry",
       "args": ["run", "brain-mcp"],
-      "cwd": "${workspaceFolder}",
+      "cwd": "/ABSOLUTE/PATH/TO/brain-os",
       "env": {
-        "BRAIN_DATA_DIR": "${workspaceFolder}/data"
+        "BRAIN_DATA_DIR": "/ABSOLUTE/PATH/TO/brain-os/data"
       }
     }
   }

@@ -62,8 +62,21 @@ poetry run brain seed-acme
 
 ```bash
 poetry run brain ask "What does the Acme demo pack contain?" --json
-poetry run brain-mcp              # Cursor: see .mcp.json.example
 ```
+
+## MCP (Cursor & Claude Code)
+
+Use Brain OS as a **local MCP server** in Cursor or Claude — search KB, CRM briefs, draft email (tiered tools).
+
+1. `cp .cursor/mcp.json.example .cursor/mcp.json` (or merge `.mcp.json.example`)
+2. Open this repo as the workspace root
+3. Enable **brain-os** in Cursor **Settings → MCP** (restart MCP after `.env` changes)
+
+```bash
+poetry run brain mcp    # smoke test (stdio server; logs on stderr)
+```
+
+Full setup: **[docs/MCP_SETUP.md](docs/MCP_SETUP.md)** · Claude Desktop: `claude_desktop_config.example.json`
 
 ## Demo pack
 
@@ -87,6 +100,7 @@ See [docs/LICENSING.md](docs/LICENSING.md) · [LICENSE](LICENSE) (BSL 1.1 — [c
 |:---------|:------|
 | [docs/BRAIN_OS_PRODUCTIZATION_ROADMAP.md](docs/BRAIN_OS_PRODUCTIZATION_ROADMAP.md) | Product architecture |
 | [docs/BRAND.md](docs/BRAND.md) | Logo, colors, social preview |
+| [docs/MCP_SETUP.md](docs/MCP_SETUP.md) | Cursor, Claude Code, Claude Desktop |
 | [docs/IRA_TRIANGULATION.md](docs/IRA_TRIANGULATION.md) | Evidence-before-action |
 | [docs/PANTHEON_SLIM_TODO.md](docs/PANTHEON_SLIM_TODO.md) | Add custom agents |
 
