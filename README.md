@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://github.com/doshirush1901/brain-os">
-    <img src="docs/assets/brain-os-banner.svg" alt="Brain OS — forkable multi-agent operating system" width="920">
+    <img src="docs/assets/readme-hero.png" alt="Brain OS — forkable multi-agent operating system" width="920">
   </a>
 </p>
 

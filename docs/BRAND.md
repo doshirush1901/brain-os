@@ -1,15 +1,23 @@
 # Brain OS — visual identity (public)
 
-Public-safe brand tokens for **brain-os** README, SVG assets, and GitHub social preview.  
+Public-safe brand tokens for **brain-os** README and GitHub social preview.  
 Voice and operator behavior for Machinecraft live in private **Ira** (`SOUL.md` in ira-v3).
 
 ## Assets (this repo)
 
 | File | Use |
 |:-----|:----|
-| `docs/assets/brain-os-logo.svg` | README header |
-| `docs/assets/brain-os-icon.svg` | Favicon / app icon base |
-| `docs/assets/social-preview.svg` | GitHub **Settings → Social preview** (export to PNG 1280×640 if needed) |
+| `docs/assets/readme-hero.png` | **README hero** (~480 KB, 1840w) — neofetch layout |
+| `docs/assets/social-preview.png` | **GitHub social preview** (1280×640, ~190 KB) |
+| `docs/assets/readme-hero-neural.png` | Optional alt hero (~730 KB) |
+
+Regenerate from masters: `ira-pimp/branding/optimize_brand_assets.sh` (requires `pngquant`).
+| `docs/assets/brain-os-banner.svg` | Lightweight fallback if PNG too heavy for a fork |
+| `docs/assets/brain-os-logo.svg` | Compact logo / docs |
+| `docs/assets/brain-os-icon.svg` | Footer icon / favicon base |
+| `docs/assets/social-preview.svg` | Vector fallback for social card |
+
+Source masters (private ira-v3): `ira-pimp/branding/` — same filenames.
 
 ## Color tokens
 
@@ -22,16 +30,18 @@ Voice and operator behavior for Machinecraft live in private **Ira** (`SOUL.md` 
 | accent-3 | `#264653` | Graph / secondary accent |
 | good | `#2a9d8f` | Success / healthy status |
 
+Swatches on `readme-hero.png` match this table.
+
 ## Mark
 
-Triangle + three nodes = **triangulation** (intent, relationship, identity) — same metaphor as Ira, product-neutral wordmark **BRAIN OS**.
+Triangle + three nodes = **triangulation** (intent, relationship, identity) — product-neutral wordmark **BRAIN OS**.
 
 ## Ira media (private / separate)
 
-- **ira-pimp/** in ira-v3: ad concept boards (`CONCEPT_01_TRIANGULATION.md`, Higgsfield prompts) — not shipped in this public repo.
-- Drop generated keyframes into `ira-pimp/keyframes/` for video; end-card colors match tokens above.
+- **ira-pimp/** in ira-v3: ad concepts + `branding/` PNGs — video keyframes in `keyframes/`.
+- Do not put Machinecraft customer photos in this public tree.
 
 ## Do not
 
-- Put Machinecraft customer photos or real quotes in this public tree.
 - Use **Ira** wordmark on Brain OS customer forks without trademark review.
+- Upload raw Mac desktop screenshots with real paths to the public repo.
