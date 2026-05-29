@@ -1190,7 +1190,7 @@ class BaseAgent(ABC):
         ]
         for slot in slots:
             lines.append(f"- {slot.get('label')}: {slot.get('booking_url')}")
-        lines.extend(["", "Best regards,", "Rushabh Doshi"])
+        lines.extend(["", "Best regards,", "Brain OS Operator"])
         return "\n".join(lines)
 
     async def _tool_web_search_default(self, query: str) -> str:

@@ -1,7 +1,7 @@
 # Brain OS — BSL 1.1 review request (for counsel)
 
 **To:** [Counsel name]  
-**From:** Rushabh Doshi / Machinecraft Technologies  
+**From:** Brain OS Operator / Machinecraft Technologies  
 **Re:** Public open-source skeleton **brain-os** — license parameters before **v1.0.0** tag  
 **Repo:** https://github.com/doshirush1901/brain-os  
 **Date:** 2026-05-30  

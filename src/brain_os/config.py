@@ -325,7 +325,7 @@ class NaPf1CampaignConfig(BaseSettings):
     business_hours_only: bool = True
     business_hour_start: int = Field(default=9, ge=0, le=23)
     business_hour_end: int = Field(default=17, ge=1, le=24)
-    send_from: str = "rushabh@machinecraft.org"
+    send_from: str = "operator@example.com"
     max_per_run: int = Field(default=1, ge=1, le=50)
     vapi_delay_s: float = Field(default=300.0, ge=0.0, le=3600.0)
     roadshow_window: str = "the week of June 22 through June 26"
@@ -541,7 +541,7 @@ class SlackConfig(BaseSettings):
     #: Timeout for Slack KB fast path retrieval before falling back to guidance.
     kb_fastpath_timeout_s: float = Field(default=15.0, ge=2.0, le=60.0)
     #: Optional JSON object mapping Slack user IDs to canonical emails.
-    #: Example: {"U01ABCDEF":"name@machinecraft.org"}
+    #: Example: {"U01ABCDEF":"name@example-company.org"}
     user_map_json: str = ""
 
 

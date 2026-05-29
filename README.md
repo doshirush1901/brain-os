@@ -81,8 +81,6 @@ Triangulation before outbound: KB, CRM, mail scope, proof registry. See `docs/IR
 
 ## Get started
 
-See **[docs/QUICKSTART.md](docs/QUICKSTART.md)** for the full walkthrough.
-
 ```bash
 git clone https://github.com/doshirush1901/brain-os.git
 cd brain-os
@@ -134,7 +132,7 @@ poetry run brain ask "Summarize the Acme demo CRM" --json
 | [Product roadmap](docs/BRAIN_OS_PRODUCTIZATION_ROADMAP.md) | Architecture and GTM |
 | [Brand assets](docs/BRAND.md) | Logo, README hero, social preview |
 | [Changelog](CHANGELOG.md) | Release notes |
-| [Git + AI](docs/GIT_AND_AI.md) | Commits, secrets, CI, forks |
+| [Git + AI](docs/GIT_AND_AI.md) | Commits, secrets, CI, maintainer export |
 | [Contributing](CONTRIBUTING.md) | PR guidelines · [Code of conduct](CODE_OF_CONDUCT.md) |
 | [Security](SECURITY.md) | Reporting issues |
 

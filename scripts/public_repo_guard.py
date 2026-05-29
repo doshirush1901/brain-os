@@ -207,8 +207,29 @@ def _demo_banner_ok(text: str) -> bool:
 # Application source (`src/`, `memory/`, `crm/`, …) legitimately mentions USD/EUR in guardrails and tests.
 _COMMERCIAL_SCAN_PREFIXES = ("scripts/",)
 
+# Maintainer machine paths and identity — never in public brain-os (src/ + prompts/).
+_IDENTITY_SCAN_PREFIXES = ("src/", "prompts/")
+_HOME_PATH_FRAGMENTS = ("/users/", "/home/", "desktop/ira-v3", "desktop/ira-v3")
+_IDENTITY_LITERALS = ("rushabh@", "rushabh doshi")
+
+
+def _scan_public_identity(rel: str, text: str, hits: list[str]) -> None:
+    lower = text.lower()
+    if rel == "export_manifest.json":
+        for frag in _HOME_PATH_FRAGMENTS:
+            if frag in lower:
+                hits.append(f"{rel}: forbidden home/path fragment `{frag}`")
+        if "/users/" in lower and "rdd0101" in lower:
+            hits.append(f"{rel}: maintainer home directory path leaked")
+    if not rel.startswith(_IDENTITY_SCAN_PREFIXES):
+        return
+    for lit in _IDENTITY_LITERALS:
+        if lit in lower:
+            hits.append(f"{rel}: forbidden identity literal `{lit}`")
+
 
 def _scan_text(rel: str, text: str, allow: dict, hits: list[str]) -> None:
+    _scan_public_identity(rel, text, hits)
     lower = text.lower()
     for frag in _ORG_EMAIL_DOMAIN_FRAGMENTS:
         if frag.lower() in lower:

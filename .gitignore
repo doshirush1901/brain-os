@@ -5,3 +5,4 @@ __pycache__/
 .DS_Store
 data/
 credentials/
+export_manifest.json
