@@ -8,7 +8,7 @@
 
 | Repo | One-liner |
 |:-----|:----------|
-| **Ira** (`ira-v3`, private) | Machinecraft’s operator brain — full vertical depth, live CRM/mail, customer data; not forked as a product. |
+| **Ira** (`ira-v3`, private) | Acme Corp’s operator brain — full vertical depth, live CRM/mail, customer data; not forked as a product. |
 | **Brain OS** (`brain-os`, public) | Forkable local-first multi-agent OS — same engine patterns as Ira, Acme demo only; your company data stays in **your** private fork. |
 | **ira-universe** (public, separate) | Visitor-safe “what is Ira?” corpus — not the runnable fork. |
 
@@ -16,7 +16,7 @@
 `Forkable multi-agent Brain OS for Mac — RAG, CRM, MCP/Cursor. Ira = private operator; this repo = build your own.`
 
 **GitHub About (ira-v3, if private description only):**  
-`Private operator stack for Machinecraft — not the public fork. Public skeleton: github.com/doshirush1901/brain-os`
+`Private operator stack for Acme Corp — not the public fork. Public skeleton: github.com/doshirush1901/brain-os`
 
 ---
 
@@ -25,13 +25,13 @@
 ### brain-os `README.md` (top, after title)
 
 ```markdown
-> **Ira** is Machinecraft’s private operator system (CRM, Gmail, production truth). **Brain OS** is the public forkable skeleton — same architecture patterns, synthetic Acme demo only. Run your business in a **private fork** of this repo; do not expect Machinecraft customer data here.
+> **Ira** is Acme Corp’s private operator system (CRM, Gmail, production truth). **Brain OS** is the public forkable skeleton — same architecture patterns, synthetic Acme demo only. Run your business in a **private fork** of this repo; do not expect Acme Corp customer data here.
 ```
 
 ### ira-v3 `README.md` (under “What this repository is”)
 
 ```markdown
-**Public fork:** Customers and design partners should start from **[brain-os](https://github.com/doshirush1901/brain-os)** — not this tree. Ira v3 is the canonical private operator codebase for Machinecraft.
+**Public fork:** Customers and design partners should start from **[brain-os](https://github.com/doshirush1901/brain-os)** — not this tree. Ira v3 is the canonical private operator codebase for Acme Corp.
 ```
 
 ---
@@ -43,7 +43,7 @@ Current public stub: `brain_os_skeleton/LICENSE` (parameters only). Full text: [
 | # | Question for counsel | Current draft answer |
 |:--|:---------------------|:---------------------|
 | 1 | Is **BSL 1.1** appropriate vs Apache-2.0-only for Community? | BSL + commercial Pro/Appliance |
-| 2 | **Licensor** legal entity name and address | “Brain OS Maintainers” → replace with Machinecraft entity |
+| 2 | **Licensor** legal entity name and address | “Brain OS Maintainers” → replace with Acme Corp entity |
 | 3 | **Change Date** (2029-01-01) — acceptable? | 4 years from first public tag; confirm |
 | 4 | **Additional Use Grant** — does “non-production” cover design-partner pilots? | Explicit pilot clause if needed |
 | 5 | **Production** definition — SaaS, internal team >N users, on-prem appliance? | Define in commercial agreement |
@@ -70,7 +70,7 @@ Use for **2–3** pilots (Q1). Goal: free/discounted Pro access + case-study rig
 LETTER OF INTENT — Brain OS Design Partner
 Date: ___________
 Parties:
-  Provider: [Machinecraft Technologies / legal entity], ("Provider")
+  Provider: [Acme Services Inc. / legal entity], ("Provider")
   Partner:  [Company legal name], ("Partner")
 
 1. Purpose
@@ -116,7 +116,7 @@ Partner:  ___________________  Date: _______
 
 | # | Profile | Why |
 |:--|:--------|:----|
-| 1 | Industrial OEM / machinery (non-competitor) | Close to Machinecraft ICP; validates pantheon + CRM |
+| 1 | Industrial OEM / machinery (non-competitor) | Close to Acme Corp ICP; validates pantheon + CRM |
 | 2 | B2B SaaS 50–200 FTE | Validates fork + Cursor MCP without factory jargon |
 | 3 | Services firm (consulting / integration) | Validates “build agents for clients” resale narrative |
 
@@ -138,6 +138,6 @@ Partner:  ___________________  Date: _______
 1. Send BSL checklist (§ above) to counsel; block **v1.0.0** tag until signed off.
 2. Fill LOI template for 3 targets; send for signature.
 3. After legal OK: `republish` brain-os with final `LICENSE` + README one-liners.
-4. Add GitHub **About** + link brain-os from ira-universe / Machinecraft site when ready.
+4. Add GitHub **About** + link brain-os from ira-universe / Acme Corp site when ready.
 
 *Last updated: 2026-05-30*

@@ -83,7 +83,7 @@ _TINDER_EXTRA_LEGS: tuple[LegSpec, ...] = (
     ),
     LegSpec(
         "icp_buyer_fit",
-        "ICP (thermoformer buyer)",
+        "ICP (industrial former buyer)",
         "ira tinder card — site + classifier",
         "tinder",
     ),

@@ -794,7 +794,7 @@ class AgentLoop:
         writer = calliope or self._athena
 
         compile_prompt = f"""Compile these multi-agent findings into a
-professional, coherent response for Machinecraft leadership.
+professional, coherent response for Acme Corp leadership.
 
 GOAL: {plan.goal}
 DATE: {datetime.now(UTC).strftime("%Y-%m-%d")}
@@ -807,7 +807,7 @@ RULES:
 - Preserve all data tables and numbers exactly
 - Flag any conflicts between agent findings; when phases disagree, say which finding is weaker evidence and what would resolve it
 - End with actionable recommendations
-- Use Machinecraft terminology naturally
+- Use Acme Corp terminology naturally
 - Do NOT speculate beyond what the data shows
 """
 

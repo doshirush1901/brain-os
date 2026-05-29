@@ -88,20 +88,20 @@ class Prometheus(BaseAgent):
             )
             self.register_tool(
                 AgentTool(
-                    name="list_active_21_deals",
+                    name="list_demo_programme_deals",
                     description=(
-                        "List all CRM deals in the Active-21 quote+reply programme "
-                        "(titles start with [Active-21]). Returns company, contact email, stage, value, deal id. "
+                        "List all CRM deals in the Demo-Programme quote+reply programme "
+                        "(titles start with [Demo-Programme]). Returns company, contact email, stage, value, deal id. "
                         "Optional source_mailbox (e.g. sales@example.com): only deals whose contact has "
                         "CRM email interactions logged from that Gmail account (after sales mailbox rescan/sync)."
                     ),
                     parameters={
                         "source_mailbox": (
                             "Optional. e.g. sales@example.com — filter to deals touched via that mailbox; "
-                            "leave empty for all Active-21 deals."
+                            "leave empty for all Demo-Programme deals."
                         ),
                     },
-                    handler=self._tool_list_active_21_deals,
+                    handler=self._tool_list_demo_programme_deals,
                 )
             )
             self.register_tool(
@@ -152,7 +152,7 @@ class Prometheus(BaseAgent):
                     name="get_punch_list_for_customer",
                     description="Get punch list (customer complaints, open issues, resolutions) for a customer. Delegates to Asclepius/Atlas. Use to see quality issues and how we solved them.",
                     parameters={
-                        "company_name_or_project": "Company name or project identifier (e.g. Acme Plastics, Demo PF1)",
+                        "company_name_or_project": "Company name or project identifier (e.g. Acme Plastics, Demo DEMO)",
                     },
                     handler=self._tool_get_punch_list_for_customer,
                 )
@@ -340,8 +340,8 @@ class Prometheus(BaseAgent):
         summary = await self._crm.get_pipeline_summary()
         return json.dumps(summary, default=str)
 
-    async def _tool_list_active_21_deals(self, source_mailbox: str = "", **_kwargs: str) -> str:
-        from brain_os.systems.active_21_crm_seed import DEAL_TITLE_PREFIX
+    async def _tool_list_demo_programme_deals(self, source_mailbox: str = "", **_kwargs: str) -> str:
+        from brain_os.systems.demo_programme_crm_seed import DEAL_TITLE_PREFIX
 
         mb = (source_mailbox or "").strip() or None
         rows = await self._crm.list_deals_by_title_prefix(
@@ -357,7 +357,7 @@ class Prometheus(BaseAgent):
                 else ""
             )
             return (
-                "No Active-21 programme deals found in CRM (seed with: ira crm seed-active-21)."
+                "No Demo-Programme programme deals found in CRM (seed with: ira crm seed-demo-programme)."
                 + hint
             )
         return json.dumps(rows, default=str)

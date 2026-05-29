@@ -1034,7 +1034,7 @@ class KnowledgeGraph:
         """Create a Chunk node linked to Qdrant and DESCRIBES edges to entities.
 
         *entity_refs* is a list of (node_label, key_value), e.g.
-        [("Company", "Acme Corp"), ("Person", "john@acme.com"), ("Machine", "PF1-A-1234")].
+        [("Company", "Acme Corp"), ("Person", "john@acme.com"), ("Machine", "DEMO-A-1234")].
         Only Company, Person, Machine, Quote are allowed. Returns the number of
         DESCRIBES edges created.
         """
@@ -1645,10 +1645,10 @@ class KnowledgeGraph:
         return created
 
     async def enrich_manufactures(self) -> int:
-        """Link Machinecraft -[MANUFACTURES]-> all Machine nodes."""
+        """Link Acme Corp -[MANUFACTURES]-> all Machine nodes."""
         result = await self._read(
             """
-            MERGE (mc:Company {name: 'Machinecraft'})
+            MERGE (mc:Company {name: 'Acme Corp'})
             WITH mc
             MATCH (m:Machine) WHERE NOT (mc)-[:MANUFACTURES]->(m)
             MERGE (mc)-[:MANUFACTURES]->(m)

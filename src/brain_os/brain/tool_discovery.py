@@ -170,7 +170,7 @@ def rank_mcp_tools(query: str, tool_names: Iterable[str]) -> list[str]:
         "objection": ("objection_rebuttal_generator", "list_outbound_proof_artifacts", "query_ira"),
         "price objection": ("objection_rebuttal_generator", "quote_competitiveness_check"),
         "rebuttal": ("objection_rebuttal_generator", "list_outbound_proof_artifacts"),
-        "quote competitiveness": ("quote_competitiveness_check", "prepare_machinecraft_quote"),
+        "quote competitiveness": ("quote_competitiveness_check", "prepare_formal_quote"),
         "margin risk": ("quote_competitiveness_check", "deal_risk_audit"),
         "evidence check": ("evidence_backing_check", "list_outbound_proof_artifacts"),
         "proof check": ("evidence_backing_check", "list_outbound_proof_artifacts", "draft_email"),
@@ -298,7 +298,7 @@ def rank_mcp_tools(query: str, tool_names: Iterable[str]) -> list[str]:
         "text search": ("maps_places_text_search", "web_search", "query_ira"),
         "businesses near": ("maps_places_text_search", "query_ira"),
         "manufacturing near": ("maps_places_text_search", "web_search", "query_ira"),
-        "thermoforming": (
+        "industrial forming": (
             "maps_places_text_search",
             "maps_places_nearby_search",
             "web_search",

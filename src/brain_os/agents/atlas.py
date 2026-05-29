@@ -550,14 +550,14 @@ class Atlas(BaseAgent):
 
         portfolio_brief = format_portfolio_brief()
         user_msg = (
-            "Compile the current production schedule for Machinecraft.\n\n"
+            "Compile the current production schedule for Acme Corp.\n\n"
             f"{portfolio_brief or '(no canonical portfolio file)'}\n\n"
             f"Logbook:\n{logbook_context or '(no active projects in logbook)'}\n\n"
             f"Knowledge base data:\n{kb_context or '(no KB excerpts)'}"
         )
         if plain_text:
             system = (
-                "You are Atlas, Machinecraft's project manager. "
+                "You are Atlas, Acme's project manager. "
                 "Reply in plain text for Slack: 5–8 short lines, use bullets. "
                 "No JSON, no ReAct, no 'thought' field. "
                 "Split answer into: (1) installation-mode recently shipped, "

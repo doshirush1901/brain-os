@@ -1,6 +1,6 @@
 """CRM MCP tools.
 
-Tools fronting ``srv._crm`` (Machinecraft CRM):
+Tools fronting ``srv._crm`` (Acme Corp CRM):
 - Deals: get_deal, list_deals, create_contact, update_deal, get_stale_leads
 - Search / pipeline: search_crm, get_pipeline_summary
 - Apollo.io enrichment + discovery: sync_crm_apollo, enrich_contact_apollo, search_people_apollo
@@ -88,7 +88,7 @@ async def create_contact(
     company_name: str = "",
     role: str = "",
 ) -> str:
-    """Create a new contact in the Machinecraft CRM.
+    """Create a new contact in the Acme Corp CRM.
 
     Returns the created contact record with its assigned ID.
     """
@@ -175,7 +175,7 @@ async def get_stale_leads(days: int = 14) -> str:
 
 
 async def search_crm(query: str) -> str:
-    """Search the Machinecraft CRM for contacts, companies, and deals.
+    """Search the Acme Corp CRM for contacts, companies, and deals.
 
     Returns matching CRM records. Use for customer lookups, deal status,
     and pipeline queries.
@@ -219,7 +219,7 @@ async def search_crm(query: str) -> str:
 
 
 async def get_pipeline_summary() -> str:
-    """Get the current Machinecraft sales pipeline summary.
+    """Get the current Acme Corp sales pipeline summary.
 
     Returns active deals, total value, stage breakdown, and top deals.
     """

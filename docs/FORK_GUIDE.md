@@ -19,7 +19,7 @@ git remote add upstream https://github.com/doshirush1901/brain-os.git
 
 ```bash
 cp SOUL.template.md SOUL.md
-# Edit SOUL.md: identity, values, outbound boundaries (no Machinecraft copy-paste)
+# Edit SOUL.md: identity, values, outbound boundaries (no private OEM copy-paste)
 ```
 
 - [ ] `SOUL.md` committed only in **your** fork

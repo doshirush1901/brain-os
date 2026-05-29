@@ -155,7 +155,7 @@ class CRMEnricher:
             evidence["company_info"] = results
 
             results = await self._qdrant.search(
-                f"{search_term} machine PF1 order delivery forming area project",
+                f"{search_term} machine DEMO order delivery forming area project",
                 limit=5,
             )
             evidence["machine_orders"] = results
@@ -556,8 +556,8 @@ class CRMEnricher:
             if "k20" in source.lower() or "k show" in source.lower():
                 tags.append("source:k_show")
                 score += 5
-            if "plastindia" in source.lower():
-                tags.append("source:plastindia")
+            if "demo_show" in source.lower():
+                tags.append("source:demo_show")
                 score += 5
 
             score = min(score, 65.0)

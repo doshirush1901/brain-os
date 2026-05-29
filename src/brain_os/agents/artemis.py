@@ -10,7 +10,7 @@ produces structured reports across four categories:
 
 Artemis works with:
 - **Alexandros** — seeds the scan with known accounts from inquiry forms,
-  lead lists, customer spreadsheets, and exhibition data in data/imports/
+  lead lists, customer spreadsheets, and exhibition data in examples/acme/docs/
 - **Delphi** — classifies individual high-value emails (Artemis only
   delegates emails that pass batch triage, not all 40k)
 - **Clio** — enriches analysis with KB context (machine specs, order history)
@@ -35,19 +35,19 @@ logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = load_prompt("artemis_system")
 
-_BATCH_TRIAGE_PROMPT = """You are a triage classifier for Machinecraft machine sales emails ONLY.
+_BATCH_TRIAGE_PROMPT = """You are a triage classifier for Acme Corp machine sales emails ONLY.
 
-Machinecraft sells industrial thermoforming and vacuum forming machines.
-Models: PF1, PF2, ATF, AM, IMG, FCS, SAM (and variants like PF1-XL, PF1-C, AM-V, PF1-X-1210, etc.)
+Acme Corp sells industrial industrial forming and vacuum forming machines.
+Models: DEMO, DEMO2, ATF, AM, IMG, FCS, SAM (and variants like DEMO-XL, DEMO-C, AM-V, DEMO-X-1210, etc.)
 
 Classify each email as:
-- SALES: Directly about Machinecraft machine sales — quotes, proposals, pricing, orders, delivery, installation, machine inquiries, customer negotiations, techno-commercial offers, support/complaints about delivered machines. MUST be processed.
+- SALES: Directly about Acme Corp machine sales — quotes, proposals, pricing, orders, delivery, installation, machine inquiries, customer negotiations, techno-commercial offers, support/complaints about delivered machines. MUST be processed.
 - SKIP: Everything else — newsletters, bank alerts, notifications, personal, internal dev tools, marketing from other companies, logistics not about MC machines, HR, finance, social media. Skip entirely.
 
 Return ONLY valid JSON — an array of objects:
 [{"id": "msg_001", "category": "SALES"}, {"id": "msg_002", "category": "SKIP"}, ...]
 
-CRITICAL: Only SALES if the email is clearly about Machinecraft machine sales, quotes, orders, delivery, or customer support for MC machines. Vendor bills, shipping advisories, and general business correspondence are SKIP unless they specifically mention a Machinecraft machine model or deal.
+CRITICAL: Only SALES if the email is clearly about Acme Corp machine sales, quotes, orders, delivery, or customer support for MC machines. Vendor bills, shipping advisories, and general business correspondence are SKIP unless they specifically mention a Acme Corp machine model or deal.
 """
 
 
@@ -96,7 +96,7 @@ class Artemis(BaseAgent):
                 description=(
                     "Ask Alexandros to extract company names, contact emails, and "
                     "machine models from inquiry forms, lead lists, customer "
-                    "spreadsheets, and exhibition data in data/imports/. Returns "
+                    "spreadsheets, and exhibition data in examples/acme/docs/. Returns "
                     "a list of known accounts to search for in the mailbox."
                 ),
                 parameters={"query": "What kind of accounts to look for"},
@@ -407,14 +407,14 @@ class Artemis(BaseAgent):
         thread_text = "\n---\n".join(messages)
 
         summary = await self._llm.generate_text(
-            "You are a sales intelligence analyst for Machinecraft.",
+            "You are a sales intelligence analyst for Acme Corp.",
             (
-                f"Analyze this email thread from Machinecraft (industrial machinery).\n\n"
+                f"Analyze this email thread from Acme Corp (industrial machinery).\n\n"
                 f"{thread_text}\n\n"
                 "Return a structured summary:\n"
                 "1. Participants (names, companies, roles)\n"
                 "2. Timeline (key dates and what happened)\n"
-                "3. Machine models mentioned (PF1, PF2, ATF, AM, IMG, FCS, SAM)\n"
+                "3. Machine models mentioned (DEMO, DEMO2, ATF, AM, IMG, FCS, SAM)\n"
                 "4. Pricing/value discussed\n"
                 "5. Current status (won, lost, pending, no response)\n"
                 "6. Next action recommended"

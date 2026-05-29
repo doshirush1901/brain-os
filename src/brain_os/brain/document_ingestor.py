@@ -1,6 +1,6 @@
 """Document ingestion pipeline for Ira's knowledge base.
 
-Walks the ``data/imports/`` directory tree, reads files in every supported
+Walks the ``examples/acme/docs/`` directory tree, reads files in every supported
 format (PDF, XLSX, DOCX, CSV, TXT), splits them into token-counted
 overlapping chunks, and upserts the resulting :class:`KnowledgeItem` objects
 into Qdrant via :class:`QdrantManager`.

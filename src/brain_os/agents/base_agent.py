@@ -214,7 +214,7 @@ class BaseAgent(ABC):
         prompt = system_prompt.strip()
         if not prompt and allow_default:
             prompt = (
-                f"You are {self.name}, the {self.role} of the Machinecraft AI Pantheon. "
+                f"You are {self.name}, the {self.role} of the Brain OS Pantheon. "
                 f"{self.description}"
             )
 
@@ -1261,9 +1261,9 @@ class BaseAgent(ABC):
             ):
                 matches.append(f"SISTER COMPANY: {sister['name']} — {sister.get('note', '')}")
 
-        for excluded in data.get("not_machinecraft", []):
+        for excluded in data.get("not_demo_oem", []):
             if query_lower in excluded.get("name", "").lower():
-                matches.append(f"NOT MACHINECRAFT: {excluded['name']} — {excluded.get('note', '')}")
+                matches.append(f"NOT DEMO OEM: {excluded['name']} — {excluded.get('note', '')}")
 
         if not matches:
             return f"No known entity match for '{query}'. Proceed with normal classification."

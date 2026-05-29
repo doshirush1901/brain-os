@@ -447,7 +447,7 @@ async def _empty_kb() -> dict[str, Any]:
 
 
 async def _fetch_kb(retriever: Any, company: str) -> dict[str, Any]:
-    query = f"{company.strip()} thermoforming forming manufacturing plastics industrial".strip()
+    query = f"{company.strip()} industrial forming forming manufacturing plastics industrial".strip()
     hits = await retriever.search(query, limit=5)
     highlights: list[str] = []
     for h in hits:
@@ -514,7 +514,7 @@ async def _fetch_argus(
     question = (
         f"Single-account dossier for {company}. "
         f"Contact: {contact_email or 'unknown'}. "
-        "Return: what they do, thermoforming fit, prior Machinecraft touchpoints, "
+        "Return: what they do, industrial forming fit, prior Acme Corp touchpoints, "
         "key people, and recommended next step. Be concise."
     )
     async with pantheon:

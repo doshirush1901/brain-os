@@ -2,7 +2,7 @@
 
 **Purpose:** Blueprint for extracting a vertical-agnostic **Brain OS** SKU from Ira v3 into a new public Git repository that companies fork, run on **Mac Pro (Apple Silicon)**, and extend with their own agents, data, and workflows — using Cursor / Claude Code as the operator surface.
 
-**Audience:** Machinecraft platform team (build) · design partners · future fork customers.
+**Audience:** Acme Corp platform team (build) · design partners · future fork customers.
 
 **Status:** Export pipeline landed (`scripts/export_brain_os.py`); public repo [brain-os](https://github.com/doshirush1901/brain-os). GTM/legal: `docs/BRAIN_OS_GTM.md`.
 
@@ -12,7 +12,7 @@
 
 > **Brain OS** is a local-first, multi-agent operating system for a company’s knowledge, relationships, and approved actions — vector + graph + memory RAG, human-in-the-loop outbound, and a forkable agent pantheon — packaged for Mac Pro deployment and operated from Cursor via MCP.
 
-**Not:** a chatbot, not a generic LangChain starter, not Machinecraft-in-a-box.
+**Not:** a chatbot, not a generic LangChain starter, not Acme Corp-in-a-box.
 
 **Is:** the **engine + governance patterns** Ira proved (pipeline, pantheon, triangulation, corrections, operator inbox) with **Acme Corp** synthetic demos and empty slots for vertical customization.
 
@@ -22,7 +22,7 @@
 
 | Repo | Role | Visibility |
 |:-----|:-----|:-----------|
-| **`ira-v3`** (this tree) | Canonical operator system for Machinecraft; full vertical depth | Private operator remote |
+| **`ira-v3`** (this tree) | Canonical operator system for Acme Corp; full vertical depth | Private operator remote |
 | **`brain-os`** (new) | Forkable skeleton: engine, generic agents, demo data, Mac bootstrap | **Public** (Apache-2.0 or BSL 1.1 — see §12) |
 | **`{customer}/brain`** (fork) | Customer’s private fork: prompts, CRM extensions, imports, `.env` | Customer private |
 
@@ -58,7 +58,7 @@ These modules are **vertical-agnostic** or need only rename (`ira` → `brain`):
 | `src/brain_os/interfaces/server.py` (slim), CLI core, MCP runtime | `src/brain_os/interfaces/` | Fewer routes in v1 |
 | `docker-compose.local.yml` | Root | Postgres, Qdrant, Neo4j, Redis |
 | `scripts/public_repo_guard.py` | Adapt for `brain-os` | Already have public-safe patterns |
-| `prompts/*_system.txt` for copied agents | `prompts/` | **De-Machinecraft** (§3.3) |
+| `prompts/*_system.txt` for copied agents | `prompts/` | **De-Acme Corp** (§3.3) |
 | `tests/` patterns | `tests/` | Target 60% coverage floor at launch |
 
 ### 3.2 Copy as **patterns**, reimplement slimmer (~25%)
@@ -73,18 +73,18 @@ These modules are **vertical-agnostic** or need only rename (`ira` → `brain`):
 | `web-ui/` | Optional: `/chat`, `/operator`, `/crm` only | Board portal, recruitment |
 | Faithfulness / guardrails | Tier 2–3 only at launch | Google Check Grounding |
 
-### 3.3 **Do not copy** — Machinecraft vertical (~15% of repo bulk, 40% of complexity)
+### 3.3 **Do not copy** — Acme Corp vertical (~15% of repo bulk, 40% of complexity)
 
 Delete or replace with stub interfaces in brain-os:
 
 | Ira module / area | Reason |
 |:------------------|:-------|
-| `agents/na_sales.py`, `pf1_react_tools.py`, `hephaestus.py` (machine specs), `quotebuilder.py`, `maestro.py` (Wolfram thermoforming) | Industrial OEM domain |
-| `systems/thermoformer_*`, `na_*`, `tinder_*`, `bfp_*`, `vapi_*`, `onshoring_*` | Sales motion specific to Machinecraft |
-| `workflows/presets/na_*`, `services/machinecraft_quote_prep.py` | Vertical workflows |
+| `agents/na_sales.py`, `pf1_react_tools.py`, `hephaestus.py` (machine specs), `quotebuilder.py`, `maestro.py` (Wolfram industrial forming) | Industrial OEM domain |
+| `systems/thermoformer_*`, `na_*`, `tinder_*`, `bfp_*`, `vapi_*`, `onshoring_*` | Sales motion specific to Acme Corp |
+| `workflows/presets/na_*`, `services/demo_quote_prep.py` | Vertical workflows |
 | `knowledge/formpack_bd.py`, `active_customer_application_enricher.py` | Customer-specific |
-| `interfaces/commands/leads/*` (most), thermoformer MCP tools | Lead-gen vertical |
-| `data/knowledge/demo_*` thermoforming copy | Replace with Acme synthetic pack |
+| `interfaces/commands/leads/*` (most), industrial former MCP tools | Lead-gen vertical |
+| `data/knowledge/demo_*` industrial forming copy | Replace with Acme synthetic pack |
 
 ### 3.4 Rewrite for vertical agnosticism
 
@@ -248,7 +248,7 @@ Phase 0 before first public tag:
 2. Path remap `ira` → `brain_os`, strip forbidden modules (§3.3)
 3. Prompt pass: LLM-assisted de-verticalize + human review
 4. `public_repo_guard.py` green + gitleaks on archive
-5. Tag `v0.1.0-skeleton` — **no Machinecraft strings** in tracked tree
+5. Tag `v0.1.0-skeleton` — **no Acme Corp strings** in tracked tree
 
 **Cadence:** Monthly upstream sync from ira-v3 engine fixes; quarterly semver for brain-os.
 
@@ -282,7 +282,7 @@ Phase 0 before first public tag:
 
 **Category:** Private AI operating system / “second brain with hands (draft-only by default)”  
 **ICP v1:** 20–200 employee B2B companies with dense documents + email + CRM, data-sensitive (manufacturing, professional services, healthcare admin, family holding companies)  
-**Beachhead:** Same profile as Machinecraft — **founder-led industrial B2B** — but **Acme** in all public materials.
+**Beachhead:** Same profile as Acme Corp — **founder-led industrial B2B** — but **Acme** in all public materials.
 
 ### GTM phases
 
@@ -378,11 +378,11 @@ Month 1 — Mnemon corrections + dream cycle review
 
 ---
 
-## 14. Immediate next steps (Machinecraft team)
+## 14. Immediate next steps (Acme Corp team)
 
 1. **Name + GitHub org** for `brain-os` public repo
 2. **Write `scripts/export_brain_os.py`** — module allowlist from §3.1–3.3
-3. **Author Acme synthetic pack** — replace thermoforming demos
+3. **Author Acme synthetic pack** — replace industrial forming demos
 4. **Legal:** BSL review + trademark “Brain OS” / “Ira” separation
 5. **Design partner LOI** — 3 companies, free Q1 in exchange for case study rights
 6. **Do not** generalize ira-v3 in place — extract to new repo (per VISION.md)

@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 _MOMENTS_SYSTEM_PROMPT = load_prompt("memorable_moments")
 
 _GREETINGS: dict[WarmthLevel, str] = {
-    WarmthLevel.STRANGER: "Hello, thank you for reaching out to Machinecraft. How can I help you today?",
+    WarmthLevel.STRANGER: "Hello, thank you for reaching out to Acme Corp. How can I help you today?",
     WarmthLevel.ACQUAINTANCE: "Hello! Good to hear from you again. How can I assist you?",
     WarmthLevel.FAMILIAR: "Hi there! Nice to connect again. What can I do for you?",
     WarmthLevel.WARM: "Hey, great to hear from you! What's on your mind?",

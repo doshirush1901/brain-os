@@ -10,7 +10,7 @@ What does this PR change?
 
 ## Checklist
 
-- [ ] No customer PII, real mailbox content, or Machinecraft-only imports
+- [ ] No customer PII, real mailbox content, or Acme Corp-only imports
 - [ ] `python scripts/public_repo_guard.py` passes
 - [ ] Licensing / MCP tier behavior documented if behavior changed
 

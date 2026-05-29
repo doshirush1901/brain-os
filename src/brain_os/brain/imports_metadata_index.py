@@ -1,4 +1,4 @@
-"""LLM-summarised metadata index for every file in ``data/imports/``.
+"""LLM-summarised metadata index for every file in ``examples/acme/docs/``.
 
 Scans the imports directory, extracts a short text preview from each file,
 and uses GPT-4.1-mini to generate structured metadata (summary, doc_type,
@@ -109,7 +109,7 @@ Return ONLY valid JSON with these fields:
 {{
     "summary": "1-2 sentence description of what this document is about",
     "doc_type": "one of: quote, catalogue, order, presentation, email, spreadsheet, report, manual, contract, lead_list, customer_data, technical_spec, brochure, invoice, other",
-    "machines": ["list of machine models mentioned, e.g. PF1-C-2015, AM-5060"],
+    "machines": ["list of machine models mentioned, e.g. DEMO-C-2015, AM-5060"],
     "topics": ["list from: pricing, specs, customer, application, lead, order, contract, presentation, marketing, technical, installation, warranty, shipping, competitor, market_research, training, quote_sent (add quote_sent for outbound quotes — we sent this to a customer; follow-up status not in document)"],
     "entities": ["company names, person names, countries mentioned"],
     "keywords": ["5-10 important searchable terms from the document"],
@@ -405,7 +405,7 @@ def _stem_words(words: set[str]) -> set[str]:
     return expanded
 
 
-# Machine / path scoring — exact set intersection misses PF1-1325 vs PF1-X-1325-PWB-UMS
+# Machine / path scoring — exact set intersection misses DEMO-1325 vs DEMO-X-1325-PWB-UMS
 # or documents whose parent folder carries the model (generic PDF filenames).
 _MACHINE_MODEL_RE = re.compile(
     r"(PF1[-\s]?[A-Z]?[-\s]?\d+[-\s]?\d*|AM[-\s]?\w+|IMG[-\s]?\d+|FCS[-\s]?\w+|UNO[-\s]?\w+|DUO[-\s]?\w+)",
@@ -419,14 +419,14 @@ def _alnum_upper(s: str) -> str:
 
 def _pf1_plate_key(machine: str) -> str | None:
     """Return the main 4-digit plate size from a model string (e.g. 1325), if present."""
-    m = re.search(r"PF1.*?(\d{4})\b", machine.upper().replace(" ", ""))
+    m = re.search(r"DEMO.*?(\d{4})\b", machine.upper().replace(" ", ""))
     return m.group(1) if m else None
 
 
 def _machine_match_score(query_machines: set[str], file_machines: list[str]) -> float:
     """Score alignment between query machine tokens and indexed machine strings.
 
-    Handles variants like PF1-1325 vs PF1-X-1325 vs PF1-1325-PWB-UMS that never match as
+    Handles variants like DEMO-1325 vs DEMO-X-1325 vs DEMO-1325-PWB-UMS that never match as
     exact strings.
     """
     if not query_machines or not file_machines:

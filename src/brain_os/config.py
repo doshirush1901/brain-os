@@ -315,12 +315,12 @@ class ApolloConfig(BaseSettings):
     api_key: SecretStr = SecretStr("")
 
 
-class NaPf1CampaignConfig(BaseSettings):
-    """NA PF1 Maps → Vapi → email overnight campaign (state-by-state Places discovery)."""
+class DemoCampaignCampaignConfig(BaseSettings):
+    """NA DEMO Maps → Vapi → email overnight campaign (state-by-state Places discovery)."""
 
-    model_config = SettingsConfigDict(env_prefix="NA_PF1_CAMPAIGN_", **_COMMON)
+    model_config = SettingsConfigDict(env_prefix="DEMO_CAMPAIGN_CAMPAIGN_", **_COMMON)
 
-    campaign_id: str = "na_pf1_maps_vapi"
+    campaign_id: str = "demo_campaign_maps_vapi"
     auto_send: bool = False
     business_hours_only: bool = True
     business_hour_start: int = Field(default=9, ge=0, le=23)
@@ -330,9 +330,9 @@ class NaPf1CampaignConfig(BaseSettings):
     vapi_delay_s: float = Field(default=300.0, ge=0.0, le=3600.0)
     roadshow_window: str = "the week of June 22 through June 26"
     web_call_cta: str = "a short web call during the first week of June"
-    places_manifest: str = "data/leads/places_us_states.json"
-    states_order_file: str = "data/leads/na_pf1_us_states_order.txt"
-    queries_file: str = "data/leads/queries_thermoforming_only.txt"
+    places_manifest: str = "examples/acme/leads/places_demo.json"
+    states_order_file: str = "examples/acme/leads/demo_states_order.txt"
+    queries_file: str = "examples/acme/leads/queries_demo.txt"
     fetch_wait_seconds: float = Field(default=120.0, ge=0.0, le=600.0)
 
 
@@ -350,12 +350,12 @@ class VapiConfig(BaseSettings):
     #: Retries after SIP/provider faults (503, providerfault) on completed dials.
     dial_retry_max: int = Field(default=2, ge=0, le=5)
     dial_retry_delay_sec: float = Field(default=45.0, ge=5.0, le=300.0)
-    #: Scrape website + ICP classify before dial (heavy-gauge PF1 buyer fit).
+    #: Scrape website + ICP classify before dial (heavy-gauge DEMO buyer fit).
     icp_gate_enabled: bool = True
     icp_force_scrape: bool = True
     icp_scrape_timeout_s: float = Field(default=25.0, ge=5.0, le=120.0)
     icp_block_min_confidence: float = Field(default=0.7, ge=0.0, le=1.0)
-    #: Use Ira thermoformer site research (map/scrape/LLM profile) before dial; else fast Firecrawl snippet + Tinder ICP only.
+    #: Use Ira industrial former site research (map/scrape/LLM profile) before dial; else fast Firecrawl snippet + Tinder ICP only.
     icp_use_ira_research: bool = True
 
 
@@ -508,7 +508,7 @@ class SlackConfig(BaseSettings):
     #: App-level token (``xapp-``) with ``connections:write`` for Socket Mode DM listener.
     app_token: SecretStr = SecretStr("")
     default_channel_id: str = ""
-    #: Optional ``#machinecraft-sales-leads`` channel ID for operator lead digests.
+    #: Optional ``#demo-sales-leads`` channel ID for operator lead digests.
     sales_leads_channel_id: str = ""
     #: Comma-separated channel IDs where ``@Ira`` mentions are answered (``app_mention``).
     allowed_channel_ids: str = ""
@@ -1062,7 +1062,7 @@ class AppConfig(BaseSettings):
     tinder_require_company_card_before_draft: bool = True
     #: On ``ira tinder status``, build company intel when missing (may take ~60s).
     tinder_auto_fetch_company_card_on_status: bool = True
-    #: Before showing a card, classify domain as thermoforming machinery buyer (website + LLM).
+    #: Before showing a card, classify domain as industrial forming machinery buyer (website + LLM).
     tinder_icp_gate_enabled: bool = True
     #: Auto ``left`` when classifier says non-buyer at or above this confidence.
     tinder_icp_auto_skip_min_confidence: float = Field(default=0.85, ge=0.0, le=1.0)
@@ -1074,24 +1074,24 @@ class AppConfig(BaseSettings):
     #: Drop May-6-style batch spray subjects when building mailbox_oldest queue.
     tinder_exclude_batch_spray_subjects: bool = True
 
-    #: Machinecraft formal quote prep MCP — Manus Machine Quote Generator URL.
-    machinecraft_quote_manus_url: str = Field(
-        default="https://quotemachinecraft.manus.space/",
+    #: Acme formal quote prep MCP — Manus Machine Quote Generator URL.
+    demo_quote_generator_url: str = Field(
+        default="https://quote-demo.example.com/",
         validation_alias=AliasChoices(
-            "APP__MACHINECRAFT_QUOTE_MANUS_URL",
-            "MACHINECRAFT_QUOTE_MANUS_URL",
+            "APP__DEMO_QUOTE_MANUS_URL",
+            "DEMO_QUOTE_MANUS_URL",
         ),
     )
     #: Optional access code for the Manus quote generator (empty = not shown in workflow).
-    machinecraft_quote_manus_access_code: str = Field(
+    demo_quote_access_code: str = Field(
         default="",
         validation_alias=AliasChoices(
-            "APP__MACHINECRAFT_QUOTE_MANUS_ACCESS_CODE",
-            "MACHINECRAFT_QUOTE_MANUS_ACCESS_CODE",
+            "APP__DEMO_QUOTE_MANUS_ACCESS_CODE",
+            "DEMO_QUOTE_MANUS_ACCESS_CODE",
         ),
     )
 
-    #: Multi-page thermoformer website research (Firecrawl map + section scrape + LLM profile).
+    #: Multi-page industrial former website research (Firecrawl map + section scrape + LLM profile).
     thermoformer_research_max_pages: int = Field(default=12, ge=3, le=40)
     thermoformer_research_delay_s: float = Field(default=2.0, ge=0.0, le=60.0)
     thermoformer_research_auto_ingest: bool = True
@@ -1349,7 +1349,7 @@ class Settings(BaseSettings):
     external_apis: ExternalAPIsConfig = ExternalAPIsConfig()
     apollo: ApolloConfig = ApolloConfig()
     vapi: VapiConfig = VapiConfig()
-    na_pf1_campaign: NaPf1CampaignConfig = NaPf1CampaignConfig()
+    demo_campaign_campaign: DemoCampaignCampaignConfig = DemoCampaignCampaignConfig()
     neverbounce: NeverBounceConfig = NeverBounceConfig()
     wolfram: WolframConfig = WolframConfig()
     search: SearchConfig = SearchConfig()

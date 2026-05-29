@@ -26,7 +26,7 @@ SENSITIVE_PATHS_BLOCKED_WITHOUT_SECRET = frozenset(
             "/api/feedback",
             "/api/llm/reset-breakers",
             "/api/crm/sync-apollo",
-            "/api/crm/seed-active-21",
+            "/api/crm/seed-demo-programme",
             "/api/crm/enrich-programme",
             "/api/write-contract/retry",
             "/api/ingest",

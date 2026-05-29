@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 
 async def query_ira(question: str, user_id: str | None = None) -> str:
-    """Ask Ira a question about Machinecraft.
+    """Ask Ira a question about Acme Corp.
 
     Routes through the full 17-step pipeline (see AGENTS.md): perceive,
     remember, route, enrich, execute, compliance, DLP, corrections, gaps,

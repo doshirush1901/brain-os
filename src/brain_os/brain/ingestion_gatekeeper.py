@@ -65,11 +65,11 @@ _ASANA_DOC_TYPE_TO_CATEGORY: dict[str, str] = {
     "presentation": "project_case_studies",
 }
 
-# Machinecraft finance imports — Qdrant ``source_category`` (slugged at upsert).
+# Acme Corp finance imports — Qdrant ``source_category`` (slugged at upsert).
 _FINANCE_PATH_TO_CATEGORY: tuple[tuple[str, str], ...] = (
     ("19_business_plans/", "business_plans"),
     ("18_tally_exports/", "tally_exports"),
-    ("10_company_internal/machinecraft_finance/", "machinecraft_finance"),
+    ("10_company_internal/demo_finance/", "demo_finance"),
 )
 
 

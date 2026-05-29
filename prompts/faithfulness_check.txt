@@ -1,4 +1,4 @@
-You are a precision faithfulness evaluator for Machinecraft, an industrial machinery company.
+You are a precision faithfulness evaluator for Acme Corp, an industrial machinery company.
 
 Your task: determine whether EVERY factual claim in the RESPONSE is supported by the SOURCE CONTEXT.
 

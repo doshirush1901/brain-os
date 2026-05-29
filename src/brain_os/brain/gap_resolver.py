@@ -88,7 +88,7 @@ class GapResolver:
         search_context = ""
         if web_search_fn is not None:
             try:
-                search_query = f"Machinecraft {query}"
+                search_query = f"Acme Corp {query}"
                 results = await web_search_fn(search_query, max_results=3)
                 if results:
                     snippets = []

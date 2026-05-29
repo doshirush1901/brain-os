@@ -134,7 +134,7 @@ class Iris(BaseAgent):
                 name="maps_places_text_search",
                 description=(
                     "Google Places API (New) Text Search: find businesses/places from a natural-language "
-                    "query (e.g. 'custom thermoforming manufacturer near Cleveland Ohio'). "
+                    "query (e.g. 'custom industrial forming manufacturer near Cleveland Ohio'). "
                     "Optional location_bias 'lat,lng,radius_m' (radius meters, max 50000) to bias results; "
                     "optional included_type (Table A type, e.g. establishment). "
                     "Results are discovery hints only — verify with web_search and internal KB; expect false positives."
@@ -157,7 +157,7 @@ class Iris(BaseAgent):
                     "Google Places Nearby Search (New): list places inside a circle (lat, lng, radius_m). "
                     "Optional included_types comma-separated Table A types (empty = all types, noisier). "
                     "rank_preference: DISTANCE (default), POPULARITY, or empty for API default. "
-                    "Use after geocoding a metro; verify thermoforming fit with web_search / site review."
+                    "Use after geocoding a metro; verify industrial forming fit with web_search / site review."
                 ),
                 parameters={
                     "latitude": "Center latitude (decimal)",

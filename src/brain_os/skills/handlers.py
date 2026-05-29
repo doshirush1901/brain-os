@@ -217,9 +217,9 @@ async def draft_outreach_email(**kwargs: Any) -> str:
 
     kb_context = ""
     if retriever:
-        search_term = company or contact_email or "Machinecraft outreach"
+        search_term = company or contact_email or "Acme Corp outreach"
         results = await retriever.search(
-            f"customer reference {search_term} thermoforming",
+            f"customer reference {search_term} industrial forming",
             limit=5,
         )
         kb_context = "\n".join(r.get("content", "")[:300] for r in results)
@@ -234,8 +234,8 @@ async def draft_outreach_email(**kwargs: Any) -> str:
     tone = regional_tones.get(region.lower(), "professional, consultative")
 
     return await _llm_call(
-        "You are a B2B sales email specialist for Machinecraft, an industrial "
-        "thermoforming machine manufacturer. Write compelling, personalised "
+        "You are a B2B sales email specialist for Acme Corp, an industrial "
+        "industrial forming machine manufacturer. Write compelling, personalised "
         "outreach emails that demonstrate domain expertise.",
         f"Draft a {stage} stage outreach email.\n\n"
         f"Recipient: {contact_email or 'unknown'}\n"
@@ -413,7 +413,7 @@ async def generate_invoice(**kwargs: Any) -> str:
         )
 
     return await _llm_call(
-        "You are a finance specialist at Machinecraft. Generate a professional "
+        "You are a finance specialist at Acme Corp. Generate a professional "
         "invoice document in markdown format with proper line items, taxes, "
         "payment terms, and bank details placeholder.",
         f"Generate an invoice for:\n"
@@ -437,13 +437,13 @@ async def create_drip_sequence(**kwargs: Any) -> str:
     retriever = _svc(SK.RETRIEVER)
     kb_context = ""
     if retriever:
-        search_term = f"{company} {machine_interest} thermoforming".strip()
+        search_term = f"{company} {machine_interest} industrial forming".strip()
         results = await retriever.search(search_term, limit=5)
         kb_context = "\n".join(r.get("content", "")[:300] for r in results)
 
     return await _llm_call(
-        "You are a B2B drip campaign designer for Machinecraft, an industrial "
-        "thermoforming machine manufacturer. Design multi-stage email sequences "
+        "You are a B2B drip campaign designer for Acme Corp, an industrial "
+        "industrial forming machine manufacturer. Design multi-stage email sequences "
         "that nurture leads from awareness to purchase decision.",
         f"Design a {num_stages}-stage drip campaign.\n\n"
         f"Target: {contact_email or 'segment'}\n"
@@ -474,8 +474,8 @@ async def generate_social_post(**kwargs: Any) -> str:
         kb_context = "\n".join(r.get("content", "")[:300] for r in results)
 
     return await _llm_call(
-        "You are a social media content specialist for Machinecraft, an industrial "
-        "thermoforming machine manufacturer. Create engaging, professional posts "
+        "You are a social media content specialist for Acme Corp, an industrial "
+        "industrial forming machine manufacturer. Create engaging, professional posts "
         "that showcase domain expertise.",
         f"Draft a {platform} post about: {topic}\n\n"
         f"Guidelines:\n"
@@ -586,7 +586,7 @@ async def data_pulling_from_email_past_conversations(**kwargs: Any) -> str:
     if proc2.returncode != 0:
         results.append(f"Download PDFs failed (exit {proc2.returncode}): {stderr2.decode()[:500]}")
     else:
-        results.append("Download PDFs OK: data/imports/downloaded_from_emails/" + folder + "/")
+        results.append("Download PDFs OK: examples/acme/docs/downloaded_from_emails/" + folder + "/")
         if stdout2:
             results.append(stdout2.decode()[-800:])
 
@@ -662,7 +662,7 @@ async def draft_proposal(**kwargs: Any) -> str:
             logger.debug("Pricing engine not available for proposal", exc_info=True)
 
     return await _llm_call(
-        "You are a proposal writer for Machinecraft, an industrial thermoforming "
+        "You are a proposal writer for Acme Corp, an industrial industrial forming "
         "machine manufacturer. Write professional, compelling proposals that "
         "highlight technical capabilities and business value.",
         f"Draft a business proposal for:\n"
@@ -676,7 +676,7 @@ async def draft_proposal(**kwargs: Any) -> str:
         f"4. Technical specifications\n"
         f"5. Pricing overview (use [TBD] for unconfirmed values)\n"
         f"6. Timeline and delivery\n"
-        f"7. Why Machinecraft\n"
+        f"7. Why Acme Corp\n"
         f"8. Next steps\n\n"
         f"Pricing intelligence:\n{pricing_context or '(none)'}\n\n"
         f"Reference material:\n{kb_context or '(none)'}",
@@ -794,7 +794,7 @@ async def estimate_production_time(**kwargs: Any) -> str:
     )
 
     return await _llm_call(
-        "You are Machinecraft's production planning specialist. Estimate lead "
+        "You are Acme's production planning specialist. Estimate lead "
         "times based on machine complexity, current order book, and historical "
         "production data. Be specific about phases: design, procurement, "
         "fabrication, assembly, testing, shipping.",
@@ -863,7 +863,7 @@ async def evaluate_vendor_risk(**kwargs: Any) -> str:
         kb_context = "\n".join(r.get("content", "")[:300] for r in results)
 
     return await _llm_call(
-        "You are a procurement risk analyst for Machinecraft. Evaluate supplier risk "
+        "You are a procurement risk analyst for Acme Corp. Evaluate supplier risk "
         "across dimensions: delivery reliability, quality consistency, commercial "
         "stability, and operational dependency.",
         f"Vendor: {vendor}\n"
@@ -997,7 +997,7 @@ async def run_governance_check(**kwargs: Any) -> str:
         return "Error: 'text' or 'response' argument required"
 
     return await _llm_call(
-        "You are a governance reviewer for Machinecraft AI outputs. Flag policy risks: "
+        "You are a governance reviewer for Acme Corp AI outputs. Flag policy risks: "
         "unverified claims, confidential disclosure, unauthorized commitments, and "
         "actions requiring human approval.",
         f"Audience: {audience}\n\n"
@@ -1040,12 +1040,12 @@ async def validate_correction_consistency(**kwargs: Any) -> str:
 
 
 async def formpack_akash_quick_quote_workflow(**kwargs: Any) -> str:
-    """Return the human-defined steps for Formpack / AskAkash quick quotes (no external API)."""
+    """Return the human-defined steps for PartnerPack / AskAkash quick quotes (no external API)."""
     _ = kwargs  # optional context ignored; supports agent use_skill(...) with extra keys
     return (
         "FORMPACK / ASKAKASH QUICK QUOTE WORKFLOW (indicative costs — verify before binding quotes)\n"
         "\n"
-        "1. Open the Formpack Quick Quote / AskAkash chat: https://askaskash.manus.space/chat\n"
+        "1. Open the PartnerPack Quick Quote / AskAkash chat: https://askaskash.manus.space/chat\n"
         "2. Use access code: 8340\n"
         "3. Chat with the bot: describe the part (material, thickness, geometry context as needed).\n"
         "4. Use bot outputs for indicative per-piece cost, trimming cost, and tooling splits "

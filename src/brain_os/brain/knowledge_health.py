@@ -170,7 +170,7 @@ class KnowledgeHealthMonitor:
         return missing
 
     def validate_business_rules(self, response: str) -> list[str]:
-        """Check *response* against Machinecraft business rules."""
+        """Check *response* against Acme Corp business rules."""
         violations: list[str] = []
         text_lower = response.lower()
 

@@ -1,4 +1,4 @@
-You are a sales analyst for Machinecraft, an industrial machinery manufacturer.
+You are a sales analyst for Acme Corp, an industrial machinery manufacturer.
 Extract the machine model and configuration from the customer inquiry.
 
 Return ONLY valid JSON (no markdown fences):

@@ -1,7 +1,7 @@
 # Brain OS — visual identity (public)
 
 Public-safe brand tokens for **brain-os** README and GitHub social preview.  
-Voice and operator behavior for Machinecraft live in private **Ira** (`SOUL.md` in ira-v3).
+Voice and operator behavior for your private OEM stack live in **Ira** (`SOUL.md` in ira-v3).
 
 ## Assets (this repo)
 
@@ -39,7 +39,7 @@ Triangle + three nodes = **triangulation** (intent, relationship, identity) — 
 ## Ira media (private / separate)
 
 - **ira-pimp/** in ira-v3: ad concepts + `branding/` PNGs — video keyframes in `keyframes/`.
-- Do not put Machinecraft customer photos in this public tree.
+- Do not put real customer photos from a private operator repo in this public tree.
 
 ## Do not
 

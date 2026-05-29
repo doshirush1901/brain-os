@@ -314,7 +314,7 @@ class VoiceSystem:
         else:
             greeting = f"Dear {recipient_name},"
 
-        return f"{greeting}\n\n{text}\n\nBest regards,\nIra\nMachinecraft AI Assistant"
+        return f"{greeting}\n\n{text}\n\nBest regards,\nIra\nAcme Corp AI Assistant"
 
 
 def _infer_warmth(contact: Contact) -> str:

@@ -11,7 +11,7 @@ This runbook is the **operational form** of [SOUL.md](../SOUL.md) **Philosophica
 | ImportYeti | Ira |
 |:-----------|:----|
 | HS codes (product class) | **Intent** — machine, material, thickness, application; quotes/PDFs; lead CSV; scrape |
-| Named Asian shippers (supply anchor) | **Relationship** — CRM stage, deals, Gmail sent/received, Active-21 / hot board |
+| Named Asian shippers (supply anchor) | **Relationship** — CRM stage, deals, Gmail sent/received, Demo-Programme / hot board |
 | Suspected US consignees (demand hypothesis) | **Identity** — company + domain, Neo4j, Argus dossier |
 
 Weak answers usually miss a leg: name without mail, draft without proof, or "lead" while Atlas shows active production.
@@ -170,7 +170,7 @@ Token presets tied to cascade depth: [LLM_COST_OPTIMIZATION.md](LLM_COST_OPTIMIZ
 
 External manifests (ImportYeti CSV, Places, Firecrawl) are not native tools. Flow:
 
-1. Ingest or `ira leads enrich-from-csv` → domains.
+1. Ingest or `brain leads enrich-from-csv` → domains.
 2. **Triangle** each priority row.
 3. **Hex** before any outbound.
 
@@ -199,7 +199,7 @@ On **right draft**, Ira runs the triangle plus **ICP buyer-fit** (`icp_buyer_fit
 | `ira ask` / API query (account-shaped) | Appends **gaps-only** table after shape | `APP__PIPELINE_TRIANGULATION_GAPS_ENABLED` (default **true**); `APP__PIPELINE_TRIANGULATION_GAPS_HEX` for hex legs |
 | MCP `draft_email`, `POST /api/email/draft` | **Hex** brief + **block** when legs missing | `APP__TRIANGULATION_ENFORCE_BEFORE_OUTBOUND_DRAFT`, `APP__TRIANGULATION_BLOCK_ON_GAPS`, `APP__TRIANGULATION_HEX_FOR_OUTBOUND_DRAFT` |
 | `persuasion_sprint` / `ira revenue persuade` | Same hex gate before Calliope | same |
-| `prepare_machinecraft_quote` | Same hex gate before quote pack | same |
+| `prepare_formal_quote` | Same hex gate before quote pack | same |
 | `ira crm blast-from-the-past draft-batch` | Brief + `triangulation_gaps` / `triangulation_ready` per row (warn, no block) | — |
 
 Override: API `skip_triangulation=true`; MCP `draft_email` context containing `skip_triangulation`. Implementation: `src/brain_os/services/triangulation_enforcement.py`.

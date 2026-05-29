@@ -1,7 +1,7 @@
 # Brain OS — BSL 1.1 review request (for counsel)
 
 **To:** [Counsel name]  
-**From:** Brain OS Operator / Machinecraft Technologies  
+**From:** Brain OS Operator / Acme Services Inc.  
 **Re:** Public open-source skeleton **brain-os** — license parameters before **v1.0.0** tag  
 **Repo:** https://github.com/doshirush1901/brain-os  
 **Date:** 2026-05-30  
@@ -25,7 +25,7 @@ GTM context: `docs/BRAIN_OS_GTM.md`
 | Parameter | Draft value |
 |:----------|:--------------|
 | **Licensed Work** | Brain OS (brain-os GitHub repository) |
-| **Licensor** | [TBD — Machinecraft legal entity name + address] |
+| **Licensor** | [TBD — Acme Corp legal entity name + address] |
 | **Additional Use Grant** | Use, copy, modify, create derivative works, and redistribute for **non-production** purposes (evaluation, research, internal development), subject to Change License |
 | **Change Date** | **2029-01-01** (≈4 years from first public release) |
 | **Change License** | Apache License, Version 2.0 |
@@ -62,7 +62,7 @@ GTM context: `docs/BRAIN_OS_GTM.md`
 
 ## Relationship to private repo
 
-- **ira-v3** (private): Machinecraft operator — **not** licensed under this public BSL for customer forks.
+- **ira-v3** (private): Acme Corp operator — **not** licensed under this public BSL for customer forks.
 - **brain-os** (public): Forkable skeleton with synthetic Acme demo only.
 
 ---

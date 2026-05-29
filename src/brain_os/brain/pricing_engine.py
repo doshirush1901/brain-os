@@ -1,4 +1,4 @@
-"""Pricing and quote intelligence for Machinecraft.
+"""Pricing and quote intelligence for Acme Corp.
 
 Provides price estimation from historical quotes, aggregate pipeline
 analytics, and formal quote-content generation.  All knowledge retrieval

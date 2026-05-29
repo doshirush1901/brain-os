@@ -9,7 +9,7 @@ Thanks for helping improve the public skeleton.
 
 ## Before you PR
 
-1. No customer PII, real mailbox content, or Machinecraft-specific imports.
+1. No customer PII, real mailbox content, or Acme Corp-specific imports.
 2. Run `python scripts/public_repo_guard.py` from repo root.
 3. Keep Community/Pro licensing behavior documented in `docs/LICENSING.md`.
 4. Read [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
@@ -30,4 +30,4 @@ See [docs/BRAIN_OS_GTM.md](docs/BRAIN_OS_GTM.md) for LOI template. Use the **Des
 
 ## Proprietary operator
 
-Production Machinecraft work happens in private **ira-v3**, not in this fork.
+Production Acme Corp work happens in private **ira-v3**, not in this fork.

@@ -49,7 +49,7 @@ async def search_emails(
     max_results: int = 10,
     mailbox_scope: str = "",
 ) -> str:
-    """Search Machinecraft's Gmail inbox.
+    """Search Acme's Gmail inbox.
 
     Filter by sender address, subject keywords, Gmail label/folder (e.g. HR, Recruitment CVs),
     free-form query, and date range (YYYY/MM/DD format). Returns matching emails

@@ -103,7 +103,7 @@ class Plutus(BaseAgent):
     knowledge_categories = [
         "quotes_and_proposals",
         "tally_exports",
-        "machinecraft finance",
+        "acme-corp finance",
         "contracts_and_legal",
         "business plans",
     ]
@@ -131,7 +131,7 @@ class Plutus(BaseAgent):
                     name="estimate_price",
                     description="Estimate the price for a machine model with optional features.",
                     parameters={
-                        "machine_model": "Machine model identifier (e.g. PF1-500)",
+                        "machine_model": "Machine model identifier (e.g. DEMO-500)",
                         "features": "Comma-separated optional features (default empty)",
                     },
                     handler=self._tool_estimate_price,
@@ -500,7 +500,7 @@ class Plutus(BaseAgent):
                 machine_model = self._extract_machine_from_query(query)
 
             if not machine_model:
-                return "Error: No machine model identified in the query. Ask for a specific model (e.g. PF1-500) or use the estimate_price tool with a machine_model parameter."
+                return "Error: No machine model identified in the query. Ask for a specific model (e.g. DEMO-500) or use the estimate_price tool with a machine_model parameter."
 
             estimate = await self._pricing_engine.estimate_price(
                 machine_model,
@@ -568,6 +568,6 @@ class Plutus(BaseAgent):
             ):
                 return token
         for i, token in enumerate(tokens):
-            if token in ("PF1", "PF2") and i + 1 < len(tokens):
+            if token in ("PF1", "DEMO2") and i + 1 < len(tokens):
                 return f"{token}-{tokens[i + 1]}"
         return ""

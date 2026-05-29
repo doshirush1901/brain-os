@@ -320,7 +320,7 @@ def crm_mailbox_digest(
         "",
         "--query",
         "-q",
-        help="Extra Gmail operators appended (e.g. subject:PF1).",
+        help="Extra Gmail operators appended (e.g. subject:DEMO).",
     ),
     max_contacts: int = typer.Option(
         80,
@@ -606,7 +606,7 @@ def crm_mailbox_digest(
     _run(_digest())
 
 
-@crm_app.command("screen-thermoforming")
+@crm_app.command("screen-industrial forming")
 def crm_screen_thermoforming(
     input_file: str = typer.Argument(..., help="Path to company list file (.csv/.xlsx/.xls)."),
     sheet: str = typer.Option("", "--sheet", help="Excel sheet name (default: all sheets)."),
@@ -632,14 +632,14 @@ def crm_screen_thermoforming(
         help="Write screened shortlist CSV to this path.",
     ),
 ) -> None:
-    """Screen exhibitor/company lists for Machinecraft thermoforming-sales fit.
+    """Screen exhibitor/company lists for Acme Corp industrial forming-sales fit.
 
-    Uses deterministic keyword scoring for process fit (thermoforming, vacuum
+    Uses deterministic keyword scoring for process fit (industrial forming, vacuum
     forming, pressure forming), gauge fit (heavy/light), and thermoplastic
     material signals (ABS, HDPE, PC, PP, PET, PLA, PS, etc.).
     """
     console.print(
-        "[red]Disabled:[/red] `ira crm screen-thermoforming` depended on "
+        "[red]Disabled:[/red] `ira crm screen-industrial forming` depended on "
         "`brain_os.systems.thermoforming_target_screener`, which is not shipped in this repository."
     )
     raise typer.Exit(1)

@@ -27,7 +27,7 @@ SKILL_MATRIX: dict[str, str] = {
     "calculate_quote": ("Build a line-item quote from product specs and pricing rules."),
     "formpack_akash_quick_quote_workflow": (
         "Documented workflow for indicative part cost, trimming, and tooling (FRP forming, "
-        "cutting fixture) via the Formpack / AskAkash quick-quote chat bot before customer emails."
+        "cutting fixture) via the PartnerPack / AskAkash quick-quote chat bot before customer emails."
     ),
     "analyze_revenue": ("Aggregate and break down revenue figures by period, product, or region."),
     "forecast_pipeline": ("Project future revenue from the current sales pipeline."),

@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 mcp = FastMCP(
     "ira",
     instructions=(
-        "Ira is Machinecraft's multi-agent assistant for thermoforming machinery sales & operations "
+        "Ira is Acme's multi-agent assistant for industrial forming machinery sales & operations "
         "(industrial OEM). Tools query Ira's pipeline, knowledge base, CRM, Gmail (when configured), "
         "memory, graph, web search, and specialist agents. "
         "**Never expose this MCP server to untrusted networks** — Gmail/CRM/memory-write tools can leak or mutate data."

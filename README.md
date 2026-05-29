@@ -55,7 +55,7 @@ Triangulation before outbound: KB, CRM, mail scope, proof registry. See `docs/IR
 <br>
 
 > [!NOTE]
-> **[Ira](https://github.com/doshirush1901/ira-v3)** is Machinecraft's *private* operator stack (live CRM, Gmail, production).
+> **[Ira](https://github.com/doshirush1901/ira-v3)** is the *private* operator stack (live CRM, Gmail, production) used to build this export.
 > **Brain OS** is the *public fork* — same engine patterns, **[Acme](examples/acme/)** synthetic data only.
 > Clone → private fork → your `.env` and data never ship in this repo.
 

@@ -37,7 +37,7 @@ Private company fork: [FORK_GUIDE.md](FORK_GUIDE.md).
 - Commit `.env`, license keys, Gmail tokens, or customer PII.
 - Add dependencies without maintainer approval.
 - Push or tag releases without explicit instruction.
-- Put Machinecraft-only paths or imports in the public tree.
+- Put private-operator-only paths or imports in the public tree.
 
 ## Maintainer note
 

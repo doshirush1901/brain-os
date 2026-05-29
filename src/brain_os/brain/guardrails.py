@@ -553,7 +553,7 @@ async def check_confidentiality(
 
         llm = get_llm_client()
         result = await llm.generate_structured(
-            "You are a data loss prevention checker for Machinecraft. "
+            "You are a data loss prevention checker for Acme Corp. "
             "Determine if the flagged snippets contain genuinely confidential "
             "internal data (margins, cost prices, salaries, vendor pricing) "
             "or if they are publicly available information (list prices, "

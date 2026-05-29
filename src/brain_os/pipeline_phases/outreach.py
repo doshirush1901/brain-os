@@ -271,7 +271,7 @@ def compose_outreach_workflow_query(
     shortlist_blob = json.dumps(shortlist[:8], default=str, ensure_ascii=True)
     return (
         "OUTREACH PRIORITIZATION WORKFLOW\n"
-        "Task: Decide who Machinecraft should contact next.\n"
+        "Task: Decide who Acme Corp should contact next.\n"
         "Rules:\n"
         "1) Use latest live thread evidence and shortlist signals.\n"
         "2) If evidence is weak or contradictory, say so explicitly.\n"

@@ -211,6 +211,24 @@ _COMMERCIAL_SCAN_PREFIXES = ("scripts/",)
 _IDENTITY_SCAN_PREFIXES = ("src/", "prompts/")
 _HOME_PATH_FRAGMENTS = ("/users/", "/home/", "desktop/ira-v3", "desktop/ira-v3")
 _IDENTITY_LITERALS = ("rushabh@", "rushabh doshi")
+_VERTICAL_FRAGMENTS = (
+    "machinecraft.org",
+    "machinecraft.in",
+    "@machinecraft.",
+    "quotemachinecraft",
+    "naffco",
+    "formpack.in",
+    "plastindia",
+    "active-21",
+)
+_SAFE_PUBLIC_DOMAIN_FRAGMENTS = (
+    "example-company.org",
+    "example-company.in",
+    "partnerpack.example",
+    "acme-corp.",
+    "example.com",
+    "acme.com",
+)
 
 
 def _scan_public_identity(rel: str, text: str, hits: list[str]) -> None:
@@ -226,6 +244,13 @@ def _scan_public_identity(rel: str, text: str, hits: list[str]) -> None:
     for lit in _IDENTITY_LITERALS:
         if lit in lower:
             hits.append(f"{rel}: forbidden identity literal `{lit}`")
+    for frag in _VERTICAL_FRAGMENTS:
+        if frag in lower:
+            hits.append(f"{rel}: forbidden vertical fragment `{frag}`")
+    if "data/imports/" in lower and "examples/acme/docs/" not in lower:
+        hits.append(f"{rel}: forbidden path `data/imports/`")
+    if re.search(r"\bmachinecraft\b", lower):
+        hits.append(f"{rel}: forbidden token `machinecraft`")
 
 
 def _scan_text(rel: str, text: str, allow: dict, hits: list[str]) -> None:
@@ -244,6 +269,8 @@ def _scan_text(rel: str, text: str, allow: dict, hits: list[str]) -> None:
             dom = m.group(2).lower()
             addr = m.group(0)
             if dom in _SAFE_EMAIL_DOMAINS or dom.endswith(".example.com"):
+                continue
+            if dom in ("example-company.org", "example-company.in", "partnerpack.example"):
                 continue
             if dom.endswith(".example.org") or dom.endswith(".example.net"):
                 continue

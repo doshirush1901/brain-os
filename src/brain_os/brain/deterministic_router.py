@@ -244,7 +244,7 @@ _PATTERNS: list[_Pattern] = _compile(
         (r"\bPF[12]-[A-Z]-?\d+\b", IntentCategory.MACHINE_SPECS, 3.0),
         (r"\bPF[12]-[A-Z]\b", IntentCategory.MACHINE_SPECS, 2.5),
         (r"\bPF[12]\b", IntentCategory.MACHINE_SPECS, 2.0),
-        (r"\bPF1-C\b", IntentCategory.MACHINE_SPECS, 2.5),
+        (r"\bDEMO-C\b", IntentCategory.MACHINE_SPECS, 2.5),
         (r"\bAM[\s-]?series\b", IntentCategory.MACHINE_SPECS, 2.0),
         (r"\bRF-100\b", IntentCategory.MACHINE_SPECS, 2.0),
         (r"\bSL-500\b", IntentCategory.MACHINE_SPECS, 2.0),

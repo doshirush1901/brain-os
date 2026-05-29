@@ -62,7 +62,7 @@ _DEAL_INTENTS = frozenset(
 )
 
 _DEAL_SUBJECT_PATTERNS = re.compile(
-    r"(?i)(quote|proposal|offer|PF1|PF2|ATF|AM[-\s]|IMG|FCS|"
+    r"(?i)(quote|proposal|offer|PF1|DEMO2|ATF|AM[-\s]|IMG|FCS|"
     r"thermoform|vacuum\s*form|machine\s+inquiry|pricing|"
     r"techno.?commercial)",
 )

@@ -316,7 +316,7 @@ class SyncApolloRequest(BaseModel):
 
 
 class SeedActive21Request(BaseModel):
-    """Optional body for POST /api/crm/seed-active-21."""
+    """Optional body for POST /api/crm/seed-demo-programme."""
 
     dry_run: bool = False
     enrich: bool = False
@@ -326,7 +326,7 @@ class SeedActive21Request(BaseModel):
 class EnrichProgrammeRequest(BaseModel):
     """Body for POST /api/crm/enrich-programme."""
 
-    programme_id: str = "active_21"
+    programme_id: str = "demo_programme"
     dry_run: bool = False
     max_messages: int = 120
 

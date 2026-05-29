@@ -1,6 +1,6 @@
 """Alexandros — The Librarian and Ingestion Gatekeeper.
 
-Gatekeeper of ``data/imports/``.  Every file in the archive has been
+Gatekeeper of ``examples/acme/docs/``.  Every file in the archive has been
 catalogued with an LLM-generated summary, entities, machines, topics,
 and keywords.  Alexandros holds this catalogue in memory and serves
 three functions:
@@ -116,7 +116,7 @@ class Alexandros(BaseAgent):
     role = "Librarian"
     description = (
         "Gatekeeper of the raw document archive. Searches, browses, "
-        "and reads files from data/imports/ using LLM-generated metadata."
+        "and reads files from examples/acme/docs/ using LLM-generated metadata."
     )
     knowledge_categories = [
         "company_internal",
@@ -443,7 +443,7 @@ class Alexandros(BaseAgent):
             combined = combined[:12000] + "\n\n[... truncated ...]"
 
         system = (
-            "You are Alexandros, the Librarian of the Machinecraft AI Pantheon. "
+            "You are Alexandros, the Librarian of the Brain OS Pantheon. "
             "You have retrieved documents from the archive. Synthesise a clear, "
             "focused answer to the user's question using ONLY the document content below. "
             "Always cite the specific filename when referencing information. "
@@ -624,7 +624,7 @@ class Alexandros(BaseAgent):
         if total == 0:
             return (
                 "Alexandros: Archive is empty. Files uploaded via /api/ingest are indexed "
-                "automatically. For files added directly to data/imports/, run `ira index-imports`."
+                "automatically. For files added directly to examples/acme/docs/, run `ira index-imports`."
             )
 
         by_folder: dict[str, int] = {}

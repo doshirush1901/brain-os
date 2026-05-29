@@ -21,7 +21,7 @@ cp examples/acme/SOUL.md ./SOUL.md   # or merge into your own soul
 
 ```bash
 poetry run brain ingest examples/acme/docs/   # when ingest CLI lands
-# Until then: copy docs into data/imports/ (gitignored) and ingest via operator path
+# Until then: copy docs into examples/acme/docs/ (gitignored) and ingest via operator path
 ```
 
 ## Day 3 — CRM seed

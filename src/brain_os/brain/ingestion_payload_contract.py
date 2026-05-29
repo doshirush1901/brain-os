@@ -47,6 +47,6 @@ def sample_knowledge_item_for_contract() -> KnowledgeItem:
     return KnowledgeItem(
         source="/tmp/sample_spec.pdf",
         source_category="machine_specs",
-        content="Sample chunk about PF1 thermoforming line.",
+        content="Sample chunk about DEMO industrial forming line.",
         metadata={"doc_type": "technical", "chunk_index": 0, "total_chunks": 1},
     )

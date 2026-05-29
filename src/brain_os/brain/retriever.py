@@ -81,7 +81,7 @@ _TEACHER_QUERY_MARKERS = (
     "nanogpt",
     "safety",
     "claude character",
-    # GTM / thermoforming / outbound
+    # GTM / industrial forming / outbound
     "thermoform",
     "vacuum form",
     "draw ratio",
@@ -119,11 +119,11 @@ _TEACHER_ID_QUERY_MARKERS: dict[str, tuple[str, ...]] = {
         "forming temperature",
         "sheet sag",
     ),
-    "machinecraft_product": (
+    "demo_product": (
         "pf1",
         "closed chamber",
         "closed-chamber",
-        "machinecraft",
+        "acme-corp",
         "uno",
         "duo",
         "fcs",
@@ -185,7 +185,7 @@ def _apply_trusted_source_boost(
     *,
     query: str = "",
 ) -> list[dict[str, Any]]:
-    """Prefer operator-maintained Machinecraft source-of-truth over ad-hoc uploads."""
+    """Prefer operator-maintained Acme Corp source-of-truth over ad-hoc uploads."""
     if not results:
         return results
     q_low = (query or "").lower()

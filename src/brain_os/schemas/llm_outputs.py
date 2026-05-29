@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class EmailIntentGoldBucket(StrEnum):
-    """Coarse buckets aligned with `data/imports/28_Emails Gold` filename prefixes."""
+    """Coarse buckets aligned with `examples/acme/docs/28_Emails Gold` filename prefixes."""
 
     SALES_LEAD = "SALES_LEAD"
     CLIENT_ACCOUNT = "CLIENT_ACCOUNT"
@@ -630,11 +630,11 @@ class CompanyScreeningProfile(BaseModel):
     evidence: list[CompanyEvidence] = Field(default_factory=list)
 
 
-# ── NA thermoforming Firecrawl discovery (LLM validation) ─────────────────
+# ── NA industrial forming Firecrawl discovery (LLM validation) ─────────────────
 
 
 class ThermoformingSiteFirecrawlLLMOutput(BaseModel):
-    """Structured site classification for custom heavy-gauge thermoforming fit."""
+    """Structured site classification for custom heavy-gauge industrial forming fit."""
 
     is_custom_heavy_gauge_thermoformer: bool = False
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
@@ -643,7 +643,7 @@ class ThermoformingSiteFirecrawlLLMOutput(BaseModel):
 
 
 class GaugeTier(StrEnum):
-    """Sheet/process gauge for thermoforming buyers (PF1 vs packaging lines)."""
+    """Sheet/process gauge for industrial forming buyers (DEMO vs packaging lines)."""
 
     HEAVY_GAUGE = "heavy_gauge"
     THIN_GAUGE = "thin_gauge"
@@ -652,27 +652,27 @@ class GaugeTier(StrEnum):
     UNKNOWN = "unknown"
 
 
-# ── India / generic thermoformer-buyer classifier (Ollama-friendly) ───────
+# ── India / generic industrial former-buyer classifier (Ollama-friendly) ───────
 
 
 class CompanyCategory(StrEnum):
-    """Coarse buckets for Machinecraft ICP triage from a homepage."""
+    """Coarse buckets for Acme Corp ICP triage from a homepage."""
 
-    THERMOFORMER = "thermoformer"  # runs thermoforming / vacuum forming lines (= buyer)
-    MACHINE_BUILDER = "machine_builder"  # builds thermoforming / packaging machines (= peer)
+    THERMOFORMER = "industrial former"  # runs industrial forming / vacuum forming lines (= buyer)
+    MACHINE_BUILDER = "machine_builder"  # builds industrial forming / packaging machines (= peer)
     MOULD_MAKER = "mould_maker"  # tool / mould / die maker
     INJECTION_OR_BLOW_MOULDER = "injection_or_blow_moulder"
-    EXTRUDER_OR_SHEET = "extruder_or_sheet"  # extrusion / sheet / film maker, no thermoforming
-    FOAM_FABRICATOR = "foam_fabricator"  # foam cutting, dunnage, CNC — not thermoforming OEM buyer
+    EXTRUDER_OR_SHEET = "extruder_or_sheet"  # extrusion / sheet / film maker, no industrial forming
+    FOAM_FABRICATOR = "foam_fabricator"  # foam cutting, dunnage, CNC — not industrial forming OEM buyer
     FLEX_PACK_OR_PRINTER = "flex_pack_or_printer"  # flexible packaging / printer / converter
     TRADER_OR_DISTRIBUTOR = "trader_or_distributor"
-    INTERNAL_GROUP = "internal_group"  # Machinecraft sister / group / family entity (NOT a lead)
+    INTERNAL_GROUP = "internal_group"  # Acme Corp sister / group / family entity (NOT a lead)
     UNRELATED = "unrelated"
     UNKNOWN = "unknown"
 
 
 class ThermoformerLeadClassification(BaseModel):
-    """Classify one company homepage as a Machinecraft thermoforming-machine BUYER (or not)."""
+    """Classify one company homepage as a Acme Corp industrial forming-machine BUYER (or not)."""
 
     category: CompanyCategory = CompanyCategory.UNKNOWN
     is_thermoformer: bool = False

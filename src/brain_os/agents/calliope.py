@@ -95,7 +95,7 @@ class Calliope(BaseAgent):
                     "else examples/public_demo/outbound_proof_artifacts.json. "
                     "Use before drafting sales/follow-up emails (Evidence step). "
                     "Pass tag_filter with region, application, machine model, or competitor "
-                    "(e.g. 'north_america US PF1-X' or 'EU Illig PF1-X-1210 Netherlands')."
+                    "(e.g. 'north_america US DEMO-X' or 'EU Illig DEMO-X-1210 Netherlands')."
                 ),
                 parameters={
                     "tag_filter": "Optional keywords to rank matching artifacts (comma/space ok)",

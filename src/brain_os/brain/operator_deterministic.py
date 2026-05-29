@@ -15,7 +15,7 @@ class OperatorRouteKind(str, Enum):
     REVENUE_DESK = "revenue_desk"
     STALE_LEADS = "stale_leads"
     HOT_BOARD = "hot_board"
-    LEAD_TIME_PF1 = "lead_time_pf1"
+    LEAD_TIME_DEMO = "lead_time_pf1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,7 +58,7 @@ def match_operator_query(query: str) -> OperatorRouteMatch | None:
     if _STALE_LEADS.search(text):
         return OperatorRouteMatch(OperatorRouteKind.STALE_LEADS)
     if _LEAD_TIME.search(text):
-        return OperatorRouteMatch(OperatorRouteKind.LEAD_TIME_PF1)
+        return OperatorRouteMatch(OperatorRouteKind.LEAD_TIME_DEMO)
     return None
 
 
@@ -149,9 +149,9 @@ async def _resolve_lead_time_pf1() -> str:
             if answer:
                 return answer
     except (ImportError, OSError, AttributeError, ValueError, TypeError) as exc:
-        logger.debug("truth hint PF1 lead time failed: %s", exc)
+        logger.debug("truth hint DEMO lead time failed: %s", exc)
     return (
-        "PF1 lead time varies by configuration and current production load. "
+        "DEMO lead time varies by configuration and current production load. "
         "Check the latest quote or production schedule in CRM; for a precise "
-        "number, ask Hephaestus with a specific PF1 model and region."
+        "number, ask Hephaestus with a specific DEMO model and region."
     )
