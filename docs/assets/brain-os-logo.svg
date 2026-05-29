@@ -1,21 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 120" role="img" aria-label="Brain OS">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 100" role="img" aria-label="Brain OS">
   <defs>
-    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="100%">
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#c8332a"/>
       <stop offset="100%" stop-color="#264653"/>
     </linearGradient>
   </defs>
-  <!-- Mark: triangulation prism + graph nodes -->
-  <g transform="translate(8 12)">
-    <polygon points="44,8 76,56 12,56" fill="none" stroke="url(#glow)" stroke-width="3" stroke-linejoin="round"/>
-    <circle cx="44" cy="8" r="5" fill="#fafaf7" stroke="#c8332a" stroke-width="2"/>
-    <circle cx="76" cy="56" r="5" fill="#fafaf7" stroke="#264653" stroke-width="2"/>
-    <circle cx="12" cy="56" r="5" fill="#fafaf7" stroke="#2a9d8f" stroke-width="2"/>
-    <line x1="44" y1="8" x2="76" y2="56" stroke="#5b6470" stroke-width="1.5" opacity="0.6"/>
-    <line x1="44" y1="8" x2="12" y2="56" stroke="#5b6470" stroke-width="1.5" opacity="0.6"/>
-    <line x1="12" y1="56" x2="76" y2="56" stroke="#5b6470" stroke-width="1.5" opacity="0.6"/>
+  <rect width="520" height="100" rx="12" fill="#0c1014"/>
+  <rect width="520" height="4" rx="12" fill="#c8332a"/>
+  <g transform="translate(24 18)">
+    <polygon points="32,6 54,44 10,44" fill="none" stroke="url(#accent)" stroke-width="2.5" stroke-linejoin="round"/>
+    <circle cx="32" cy="6" r="4" fill="#fafaf7"/>
+    <circle cx="54" cy="44" r="4" fill="#e9c46a"/>
+    <circle cx="10" cy="44" r="4" fill="#2a9d8f"/>
   </g>
-  <!-- Wordmark -->
-  <text x="100" y="54" font-family="Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="36" font-weight="800" fill="#0c1014" letter-spacing="0.08em">BRAIN</text>
-  <text x="100" y="88" font-family="Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="22" font-weight="600" fill="#5b6470" letter-spacing="0.28em">OS</text>
+  <text x="88" y="48" font-family="system-ui, sans-serif" font-size="28" font-weight="700" fill="#fafaf7" letter-spacing="0.1em">BRAIN</text>
+  <text x="88" y="72" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#9ba3ad" letter-spacing="0.35em">OS</text>
 </svg>
