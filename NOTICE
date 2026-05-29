@@ -1,0 +1,32 @@
+# Third-party notices — Brain OS
+
+Brain OS bundles and depends on open-source software. This file lists major
+runtime dependencies; see `poetry.lock` for the full transitive tree.
+
+| Component | License (typical) | Use in Brain OS |
+|:----------|:------------------|:----------------|
+| Python | PSF | Runtime |
+| Pydantic | MIT | Settings and schemas |
+| FastAPI / Starlette / Uvicorn | MIT / BSD | Optional HTTP API |
+| SQLAlchemy / asyncpg / Alembic | MIT | CRM (Postgres) |
+| qdrant-client | Apache-2.0 | Vector retrieval |
+| neo4j | Apache-2.0 | Knowledge graph |
+| redis | MIT | Cache / streams |
+| OpenAI Python SDK | MIT | LLM provider |
+| Anthropic SDK | MIT | LLM provider |
+| httpx | BSD-3-Clause | HTTP client |
+| Typer / Click | MIT | CLI |
+| MCP (Python SDK) | MIT | Cursor / Claude integration |
+| mem0ai | Apache-2.0 | Long-term memory (optional) |
+| Langfuse | MIT | Tracing (optional) |
+| Voyage AI client | MIT | Embeddings (optional) |
+| Instructor | MIT | Structured LLM outputs |
+
+**Infrastructure images** (not shipped in this repo): Qdrant, Neo4j,
+PostgreSQL, Redis — see `docker-compose.local.yml` and each vendor's license.
+
+**Trademarks:** Brain OS, Ira, Cursor, Claude, OpenAI, and other names are
+property of their respective owners.
+
+Counsel may require expanding this file before **v1.0.0**; see
+[docs/BRAIN_OS_BSL_COUNSEL_BRIEF.md](docs/BRAIN_OS_BSL_COUNSEL_BRIEF.md).

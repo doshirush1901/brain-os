@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: Public repo guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pyyaml
+      - run: python scripts/public_repo_guard.py
+
+  build:
+    name: Poetry check and import smoke
+    runs-on: ubuntu-latest
+    needs: [guard]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install poetry
+      - run: poetry check
+      - run: poetry install --no-interaction
+      - run: poetry run python -c "import brain_os; print('brain_os import ok')"

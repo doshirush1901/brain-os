@@ -5,6 +5,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/doshirush1901/brain-os/actions/workflows/ci.yml"><img src="https://github.com/doshirush1901/brain-os/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.11+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-BSL_1.1-c8332a?style=for-the-badge" alt="BSL 1.1"></a>
   <a href="docs/LICENSING.md"><img src="https://img.shields.io/badge/Tier-Community_%2B_Pro-264653?style=for-the-badge" alt="Community + Pro"></a>
@@ -12,11 +13,13 @@
 </p>
 
 <p align="center">
-  <a href="#get-started"><strong>Get started</strong></a>
+  <a href="docs/QUICKSTART.md"><strong>Quickstart</strong></a>
   &nbsp;&middot;&nbsp;
   <a href="docs/MCP_SETUP.md"><strong>MCP setup</strong></a>
   &nbsp;&middot;&nbsp;
   <a href="examples/acme/journey.md"><strong>Acme demo</strong></a>
+  &nbsp;&middot;&nbsp;
+  <a href="docs/FORK_GUIDE.md"><strong>Fork guide</strong></a>
   &nbsp;&middot;&nbsp;
   <a href="docs/LICENSING.md"><strong>Licensing</strong></a>
 </p>
@@ -78,6 +81,8 @@ Triangulation before outbound: KB, CRM, mail scope, proof registry. See `docs/IR
 
 ## Get started
 
+See **[docs/QUICKSTART.md](docs/QUICKSTART.md)** for the full walkthrough.
+
 ```bash
 git clone https://github.com/doshirush1901/brain-os.git
 cd brain-os
@@ -123,10 +128,13 @@ poetry run brain ask "Summarize the Acme demo CRM" --json
 
 | Doc | Description |
 |:----|:------------|
-| [Product roadmap](docs/BRAIN_OS_PRODUCTIZATION_ROADMAP.md) | Architecture and GTM |
+| [Quickstart](docs/QUICKSTART.md) | Clone → bootstrap → first `brain ask` |
+| [Fork guide](docs/FORK_GUIDE.md) | Private fork checklist (7 days → month 1) |
 | [MCP setup](docs/MCP_SETUP.md) | Cursor, Claude Code, Claude Desktop |
-| [Brand assets](docs/BRAND.md) | Logo, banner, social preview |
-| [Contributing](CONTRIBUTING.md) | PR guidelines |
+| [Product roadmap](docs/BRAIN_OS_PRODUCTIZATION_ROADMAP.md) | Architecture and GTM |
+| [Brand assets](docs/BRAND.md) | Logo, README hero, social preview |
+| [Changelog](CHANGELOG.md) | Release notes |
+| [Contributing](CONTRIBUTING.md) | PR guidelines · [Code of conduct](CODE_OF_CONDUCT.md) |
 | [Security](SECURITY.md) | Reporting issues |
 
 **Also:** [ira-universe](https://github.com/doshirush1901/ira-universe) (visitor-safe Ira explainer) · [ira-v3](https://github.com/doshirush1901/ira-v3) (private operator reference)
