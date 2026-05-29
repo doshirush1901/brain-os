@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-label="Brain OS  forkable multi-agent OS">
+  <rect width="1280" height="640" fill="#0c1014"/>
+  <rect width="1280" height="8" fill="#c8332a"/>
+  <g transform="translate(120 140)">
+    <polygon points="120,40 200,160 40,160" fill="none" stroke="#c8332a" stroke-width="6" stroke-linejoin="round"/>
+    <circle cx="120" cy="40" r="12" fill="#fafaf7"/>
+    <circle cx="200" cy="160" r="12" fill="#e9c46a"/>
+    <circle cx="40" cy="160" r="12" fill="#2a9d8f"/>
+    <line x1="120" y1="40" x2="200" y2="160" stroke="#5b6470" stroke-width="3"/>
+    <line x1="120" y1="40" x2="40" y2="160" stroke="#5b6470" stroke-width="3"/>
+    <line x1="40" y1="160" x2="200" y2="160" stroke="#5b6470" stroke-width="3"/>
+  </g>
+  <text x="360" y="280" font-family="Inter, system-ui, sans-serif" font-size="72" font-weight="800" fill="#fafaf7" letter-spacing="0.06em">BRAIN OS</text>
+  <text x="360" y="340" font-family="Inter, system-ui, sans-serif" font-size="32" font-weight="500" fill="#9ba3ad">Forkable multi-agent OS for Mac</text>
+  <text x="360" y="400" font-family="Inter, system-ui, sans-serif" font-size="26" fill="#5b6470">RAG · CRM · MCP / Cursor · Community + Pro</text>
+  <text x="360" y="480" font-family="Inter, system-ui, sans-serif" font-size="22" fill="#2a9d8f">github.com/doshirush1901/brain-os</text>
+</svg>

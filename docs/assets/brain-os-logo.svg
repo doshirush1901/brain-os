@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 120" role="img" aria-label="Brain OS">
+  <defs>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#c8332a"/>
+      <stop offset="100%" stop-color="#264653"/>
+    </linearGradient>
+  </defs>
+  <!-- Mark: triangulation prism + graph nodes -->
+  <g transform="translate(8 12)">
+    <polygon points="44,8 76,56 12,56" fill="none" stroke="url(#glow)" stroke-width="3" stroke-linejoin="round"/>
+    <circle cx="44" cy="8" r="5" fill="#fafaf7" stroke="#c8332a" stroke-width="2"/>
+    <circle cx="76" cy="56" r="5" fill="#fafaf7" stroke="#264653" stroke-width="2"/>
+    <circle cx="12" cy="56" r="5" fill="#fafaf7" stroke="#2a9d8f" stroke-width="2"/>
+    <line x1="44" y1="8" x2="76" y2="56" stroke="#5b6470" stroke-width="1.5" opacity="0.6"/>
+    <line x1="44" y1="8" x2="12" y2="56" stroke="#5b6470" stroke-width="1.5" opacity="0.6"/>
+    <line x1="12" y1="56" x2="76" y2="56" stroke="#5b6470" stroke-width="1.5" opacity="0.6"/>
+  </g>
+  <!-- Wordmark -->
+  <text x="100" y="54" font-family="Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="36" font-weight="800" fill="#0c1014" letter-spacing="0.08em">BRAIN</text>
+  <text x="100" y="88" font-family="Inter, system-ui, -apple-system, Segoe UI, sans-serif" font-size="22" font-weight="600" fill="#5b6470" letter-spacing="0.28em">OS</text>
+</svg>

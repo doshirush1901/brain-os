@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Brain OS icon">
+  <rect width="128" height="128" rx="28" fill="#0c1014"/>
+  <polygon points="64,24 96,88 32,88" fill="none" stroke="#c8332a" stroke-width="4" stroke-linejoin="round"/>
+  <circle cx="64" cy="24" r="6" fill="#fafaf7"/>
+  <circle cx="96" cy="88" r="6" fill="#e9c46a"/>
+  <circle cx="32" cy="88" r="6" fill="#2a9d8f"/>
+  <line x1="64" y1="24" x2="96" y2="88" stroke="#9ba3ad" stroke-width="2" opacity="0.7"/>
+  <line x1="64" y1="24" x2="32" y2="88" stroke="#9ba3ad" stroke-width="2" opacity="0.7"/>
+  <line x1="32" y1="88" x2="96" y2="88" stroke="#9ba3ad" stroke-width="2" opacity="0.7"/>
+</svg>
