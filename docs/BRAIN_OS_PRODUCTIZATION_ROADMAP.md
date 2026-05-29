@@ -4,7 +4,7 @@
 
 **Audience:** Machinecraft platform team (build) · design partners · future fork customers.
 
-**Status:** Planning doc — not implemented. Ira v3 remains the private operator canonical tree until export scripts land.
+**Status:** Export pipeline landed (`scripts/export_brain_os.py`); public repo [brain-os](https://github.com/doshirush1901/brain-os). GTM/legal: `docs/BRAIN_OS_GTM.md`.
 
 ---
 

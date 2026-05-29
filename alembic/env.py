@@ -16,13 +16,10 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from brain_os.data.crm import Base
 from brain_os.data.quotes import QuoteModel  # noqa: F401 — registers table on Base.metadata
-try:
-    from brain_os.data.recruitment import (  # noqa: F401 — optional slim export
-        RecruitmentCandidateModel,
-        RecruitmentStageEventModel,
-    )
-except ModuleNotFoundError:
-    pass
+from brain_os.data.recruitment import (  # noqa: F401 — registers recruitment tables on Base.metadata
+    RecruitmentCandidateModel,
+    RecruitmentStageEventModel,
+)
 
 config = context.config
 

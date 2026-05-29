@@ -29,7 +29,7 @@ mem0ai = ">=0.1"
 alembic = ">=1.13"
 redis = {version = ">=5.0", extras = ["hiredis"]}
 voyageai = "^0.3.0"
-greenlet = "^3.5.1"
+greenlet = "^3.3.2"
 
 [tool.poetry.scripts]
 brain = "brain_os.interfaces.cli:app"
