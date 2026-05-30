@@ -24,7 +24,7 @@ from brain_os.brain.qdrant_manager import QdrantManager
 from brain_os.brain.retriever import UnifiedRetriever
 from brain_os.brain.untrusted_input import sanitize_for_llm_embedding
 from brain_os.data.models import KnowledgeItem
-from brain_os.exceptions import DatabaseError, IraError, PathTraversalError
+from brain_os.exceptions import DatabaseError, BrainOSError, PathTraversalError
 from brain_os.schemas.llm_outputs import DeepFacts, KnowledgeGap
 from brain_os.services.llm_client import get_llm_client
 
@@ -246,6 +246,6 @@ class KnowledgeDiscovery:
                 name="discovery.contradiction_check",
             )
             return verdict.strip().upper().startswith("YES")
-        except IraError:
+        except BrainOSError:
             logger.debug("Contradiction check failed; allowing upsert", exc_info=True)
             return False

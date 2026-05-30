@@ -16,7 +16,7 @@ from googleapiclient.errors import HttpError as GoogleApiHttpError
 from sqlalchemy.exc import SQLAlchemyError
 
 from brain_os.config import get_settings
-from brain_os.exceptions import IraError
+from brain_os.exceptions import BrainOSError
 from brain_os.prompt_loader import load_prompt
 from brain_os.services.llm_client import LLMClient
 
@@ -248,7 +248,7 @@ class AutonomousDripEngine:
                 insights = await self._llm_evaluate_insights(result)
                 if insights is not None:
                     result["llm_insights"] = insights
-            except (TimeoutError, IraError, OSError, RuntimeError, ValueError, TypeError):
+            except (TimeoutError, BrainOSError, OSError, RuntimeError, ValueError, TypeError):
                 logger.exception("Drip LLM evaluate failed")
         return result
 
@@ -301,7 +301,7 @@ class AutonomousDripEngine:
                         except (
                             TimeoutError,
                             SQLAlchemyError,
-                            IraError,
+                            BrainOSError,
                             GoogleApiHttpError,
                             AttributeError,
                             OSError,
@@ -366,7 +366,7 @@ class AutonomousDripEngine:
                             "Reply check failed for step %d", step.step_number, exc_info=True
                         )
 
-        except (SQLAlchemyError, IraError, OSError, RuntimeError, ValueError, TypeError):
+        except (SQLAlchemyError, BrainOSError, OSError, RuntimeError, ValueError, TypeError):
             logger.exception("Reply check cycle failed")
 
         return {"replies_detected": reply_count}
@@ -387,6 +387,6 @@ class AutonomousDripEngine:
                 adjustments = await self._llm_suggest_adjustments(evaluation)
                 if adjustments is not None:
                     out["llm_adjustments"] = adjustments
-            except (TimeoutError, IraError, OSError, RuntimeError, ValueError, TypeError):
+            except (TimeoutError, BrainOSError, OSError, RuntimeError, ValueError, TypeError):
                 logger.exception("Drip LLM adjust failed")
         return out

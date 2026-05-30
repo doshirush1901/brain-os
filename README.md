@@ -46,7 +46,7 @@
 
 ### Evidence-first
 
-Triangulation before outbound: KB, CRM, mail scope, proof registry. See `docs/IRA_TRIANGULATION.md`.
+Triangulation before outbound: KB, CRM, mail scope, proof registry. See `docs/TRIANGULATION.md`.
 
 </td>
 </tr>
@@ -54,10 +54,8 @@ Triangulation before outbound: KB, CRM, mail scope, proof registry. See `docs/IR
 
 <br>
 
-> [!NOTE]
-> **[Ira](https://github.com/doshirush1901/ira-v3)** is the *private* operator stack (live CRM, Gmail, production) used to build this export.
-> **Brain OS** is the *public fork* — same engine patterns, **[Acme](examples/acme/)** synthetic data only.
-> Clone → private fork → your `.env` and data never ship in this repo.
+> **Brain OS** is a *public fork* of a local-first multi-agent engine — **[Acme](examples/acme/)** synthetic data only.
+> Clone → private fork → your `.env` and production data never ship in this repo.
 
 ---
 
@@ -129,19 +127,17 @@ poetry run brain ask "Summarize the Acme demo CRM" --json
 | [Quickstart](docs/QUICKSTART.md) | Clone → bootstrap → first `brain ask` |
 | [Fork guide](docs/FORK_GUIDE.md) | Private fork checklist (7 days → month 1) |
 | [MCP setup](docs/MCP_SETUP.md) | Cursor, Claude Code, Claude Desktop |
-| [Triangulation](docs/IRA_TRIANGULATION.md) | Account evidence model |
+| [Triangulation](docs/TRIANGULATION.md) | Account evidence model |
 | [Brand assets](docs/BRAND.md) | Logo, README hero, social preview |
 | [Changelog](CHANGELOG.md) | Release notes |
 | [Git + AI](docs/GIT_AND_AI.md) | Commits, secrets, CI, maintainer export |
 | [Contributing](CONTRIBUTING.md) | PR guidelines · [Code of conduct](CODE_OF_CONDUCT.md) |
 | [Security](SECURITY.md) | Reporting issues |
 
-**Also:** [ira-universe](https://github.com/doshirush1901/ira-universe) (visitor-safe Ira explainer) · [ira-v3](https://github.com/doshirush1901/ira-v3) (private operator reference)
-
 ---
 
 <p align="center">
   <img src="docs/assets/brain-os-icon.svg" alt="" width="48">
   <br>
-  <sub>Built from <a href="https://github.com/doshirush1901/ira-v3">Ira v3</a> · Maintained via <code>export_brain_os.py</code> in the private tree</sub>
+  <sub>Brain OS · Maintained via <code>export_brain_os.py</code> in the private maintainer tree</sub>
 </p>

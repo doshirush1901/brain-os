@@ -38,7 +38,7 @@ from brain_os.brain.imports_intents import (
     infer_intents_from_text,
     normalize_intent_tags,
 )
-from brain_os.exceptions import IngestionError, IraError, LLMError
+from brain_os.exceptions import IngestionError, BrainOSError, LLMError
 from brain_os.schemas.llm_outputs import DocumentMetadata
 from brain_os.services.llm_client import get_llm_client
 
@@ -78,7 +78,7 @@ def _extract_preview(filepath: Path) -> str:
     if filepath.suffix.lower() in (".txt", ".json", ".csv", ".md"):
         try:
             return filepath.read_text(errors="ignore")[:_TEXT_PREVIEW_CHARS]
-        except (IraError, OSError, UnicodeDecodeError):
+        except (BrainOSError, OSError, UnicodeDecodeError):
             logger.debug("Plain-text read failed for %s", filepath.name)
     return ""
 
@@ -95,7 +95,7 @@ def _file_fingerprint(filepath: Path) -> str:
 
 @observe()
 async def _generate_metadata_llm(filename: str, text_preview: str) -> dict[str, Any] | None:
-    """Use Ira's fast model profile to produce structured metadata from a file preview."""
+    """Use Brain OS's fast model profile to produce structured metadata from a file preview."""
     system = "Extract structured metadata from documents. Return only valid JSON."
     intents_csv = ", ".join(INTENT_TAGS)
     user = f"""Analyze this document and return structured metadata as JSON.

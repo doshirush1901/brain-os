@@ -1024,7 +1024,7 @@ def reset_llm_client() -> None:
 
 def reset_llm_circuit_breakers() -> None:
     """Clear LLM circuit breakers so the next request is attempted.
-    Use after reloading the OpenAI wallet or when starting Ira so prior 429s don't block."""
+    Use after reloading the OpenAI wallet or when starting Brain OS so prior 429s don't block."""
     client = get_llm_client()
     client._openai_breaker.reset()
     client._anthropic_breaker.reset()

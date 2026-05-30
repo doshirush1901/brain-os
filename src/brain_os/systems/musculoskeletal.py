@@ -1,6 +1,6 @@
 """Musculoskeletal system — action tracking and learning signal extraction.
 
-Records every action Ira takes (emails sent, quotes generated, leads qualified)
+Records every action Brain OS takes (emails sent, quotes generated, leads qualified)
 with their outcomes, then periodically analyzes the records to extract
 "myokines" — learning signals about what's working and what isn't.
 """

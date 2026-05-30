@@ -278,7 +278,7 @@ def operator_activity_cmd(
     json_output: bool = typer.Option(False, "--json", help="Print JSON payload."),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
-    """What Ira did today (operator timezone): runs, dream, heartbeat, journal, inbox audit."""
+    """What Brain OS did today (operator timezone): runs, dream, heartbeat, journal, inbox audit."""
     _configure_logging(verbose)
     outbound, _, quotes = _shared_services()
     tinder = TinderEmailModeService(data_root=get_data_dir())
@@ -310,7 +310,7 @@ def operator_release_cmd(
     json_output: bool = typer.Option(False, "--json"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
-    """Turn Ira loose — allow heartbeat query jobs when APP__OPERATOR_RELEASE_REQUIRED=true."""
+    """Release autonomous mode — allow heartbeat query jobs when APP__OPERATOR_RELEASE_REQUIRED=true."""
     _configure_logging(verbose)
     from brain_os.config import get_settings
 
@@ -343,4 +343,4 @@ def operator_release_cmd(
     if not result.get("ok"):
         err_console.print(f"[red]{result.get('error')}[/red]")
         raise typer.Exit(1)
-    console.print(f"[green]Ira released[/green] until {result['session'].get('released_until')}")
+    console.print(f"[green]Brain OS released[/green] until {result['session'].get('released_until')}")

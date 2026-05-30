@@ -1,4 +1,4 @@
-"""Neo4j knowledge-graph manager for Ira.
+"""Neo4j knowledge-graph manager for Brain OS.
 
 Stores and queries structured entity relationships — companies, people,
 machines, and quotes — as a property graph.  Every write uses ``MERGE`` to
@@ -34,7 +34,7 @@ from brain_os.brain.knowledge_graph_text import (
     valid_prop_key,
 )
 from brain_os.config import Neo4jConfig, get_settings
-from brain_os.exceptions import DatabaseError, IraError
+from brain_os.exceptions import DatabaseError, BrainOSError
 from brain_os.services.llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
@@ -197,7 +197,7 @@ class KnowledgeGraph:
                     source_store=SourceStore.NEO4J,
                 )
             )
-        except (TimeoutError, IraError, OSError, TypeError, ValueError, AttributeError, KeyError):
+        except (TimeoutError, BrainOSError, OSError, TypeError, ValueError, AttributeError, KeyError):
             logger.debug("Neo4j event emission failed", exc_info=True)
 
     # ── schema / indexes ─────────────────────────────────────────────────

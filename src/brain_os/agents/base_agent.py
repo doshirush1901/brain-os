@@ -29,7 +29,7 @@ from pydantic import ValidationError
 
 from brain_os.brain.retriever import UnifiedRetriever
 from brain_os.config import get_settings
-from brain_os.exceptions import IraError, LLMError, ToolExecutionError
+from brain_os.exceptions import BrainOSError, LLMError, ToolExecutionError
 from brain_os.message_bus import MessageBus
 from brain_os.prompt_loader import load_prompt, load_soul_preamble
 from brain_os.schemas.agent_handoff import AgentHandoffBrief
@@ -45,7 +45,7 @@ _AGENT_ENRICHMENT_ERRORS = (OSError, KeyError, ValueError, TypeError, AttributeE
 # TODO: define AgentDelegationError
 _DELEGATION_ERRORS = (
     ToolExecutionError,
-    IraError,
+    BrainOSError,
     ValueError,
     KeyError,
     RuntimeError,
@@ -73,7 +73,7 @@ _CRAWL_SCRAPE_ERRORS = (
     TypeError,
 )
 _RELATIONSHIP_EVENT_ERRORS = (
-    IraError,
+    BrainOSError,
     OSError,
     RuntimeError,
     ValueError,
@@ -849,16 +849,16 @@ class BaseAgent(ABC):
         depth = self._services.get("_delegation_depth", 0)
         limit = self._max_delegation_depth
         if depth >= limit:
-            raise IraError(
+            raise BrainOSError(
                 "Delegation depth limit reached. "
                 "Please synthesize your answer from the information already gathered."
             )
         pantheon = self._services.get(SK.PANTHEON)
         if not pantheon:
-            raise IraError("Pantheon service unavailable.")
+            raise BrainOSError("Pantheon service unavailable.")
         agent = pantheon.get_agent(agent_name.lower())
         if agent is None:
-            raise IraError(f"Agent '{agent_name}' not found.")
+            raise BrainOSError(f"Agent '{agent_name}' not found.")
         composed = question
         raw_hj = (handoff_json or "").strip()
         if raw_hj:
@@ -868,7 +868,7 @@ class BaseAgent(ABC):
                     brief = brief.model_copy(update={"source_agent": self.name})
                 composed = AgentHandoffBrief.compose_query(brief, question)
             except _HANDOFF_JSON_ERRORS as exc:
-                raise IraError(f"Invalid handoff_json: {exc}") from exc
+                raise BrainOSError(f"Invalid handoff_json: {exc}") from exc
         child_ctx: dict[str, Any] = {"_delegation_depth": depth + 1}
         if isinstance(getattr(self, "_context", None), dict):
             for key in ("email_scope", "run_id", "contact_id", "channel", "_tool_audit"):
@@ -885,7 +885,7 @@ class BaseAgent(ABC):
             )
         except _DELEGATION_ERRORS as exc:
             logger.warning("Delegation to '%s' failed in %s: %s", agent_name, self.name, exc)
-            raise IraError(f"Agent '{agent_name}' error: {exc}") from exc
+            raise BrainOSError(f"Agent '{agent_name}' error: {exc}") from exc
 
     async def _tool_search_emails(
         self,

@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from brain_os.exceptions import DatabaseError, IraError, ToolExecutionError
+from brain_os.exceptions import DatabaseError, BrainOSError, ToolExecutionError
 from brain_os.pipeline_phases.compile import schedule_exit_run_record
 from brain_os.pipeline_phases.error_handling import (
     complete_short_circuit_response,
@@ -591,7 +591,7 @@ async def maybe_short_circuit_quick_pipeline(
             ),
             record_stage_fn=record_stage_fn,
         )
-    except (DatabaseError, IraError, Exception):
+    except (DatabaseError, BrainOSError, Exception):
         record_degradation_event(trace, layer="crm", code="quick_pipeline_read_failed")
         logger.debug("Quick pipeline failed (non-critical), continuing", exc_info=True)
         return None

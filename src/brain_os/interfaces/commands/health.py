@@ -7,7 +7,7 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
-from brain_os.exceptions import IraError
+from brain_os.exceptions import BrainOSError
 from brain_os.interfaces.cli.runtime import _configure_logging, _run
 
 console = Console()
@@ -50,7 +50,7 @@ def health(
             progress.add_task("health", total=None)
             try:
                 report = await immune.run_startup_validation()
-            except (IraError, Exception) as exc:
+            except (BrainOSError, Exception) as exc:
                 report = getattr(exc, "health_report", {})
 
         table = Table(title="Brain OS Health")

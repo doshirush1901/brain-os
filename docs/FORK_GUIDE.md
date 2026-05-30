@@ -69,7 +69,7 @@ See [MCP_SETUP.md](MCP_SETUP.md). Enable the server in **Cursor → Settings →
 
 - [ ] Copy `examples/acme/proof_registry.json` → your approved URLs only
 - [ ] Draft-only until explicit human **send**
-- [ ] Run triangulation before outbound ([IRA_TRIANGULATION.md](IRA_TRIANGULATION.md))
+- [ ] Run triangulation before outbound ([TRIANGULATION.md](TRIANGULATION.md))
 
 ## Day 7 — Operator inbox dry run
 

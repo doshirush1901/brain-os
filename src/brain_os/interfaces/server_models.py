@@ -33,7 +33,7 @@ class QueryResponse(BaseModel):
 
 
 class QueryAgentRequest(BaseModel):
-    """Ask a specific agent directly (bypasses pipeline routing). Use for Cursor/Ira flows where Ira must contribute a minimum share."""
+    """Ask a specific agent directly (bypasses pipeline routing). Use for Cursor/Brain OS flows where Brain OS must contribute a minimum share."""
 
     query: str
     agent_name: str  # e.g. "themis", "calliope", "clio"

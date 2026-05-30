@@ -1,4 +1,4 @@
-"""Alembic async migration environment for Ira CRM.
+"""Alembic async migration environment for Brain OS CRM.
 
 Imports all ORM models so Base.metadata reflects the full schema,
 then runs migrations using the async engine.

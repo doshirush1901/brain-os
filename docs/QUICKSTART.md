@@ -64,7 +64,7 @@ Enable **brain-os** in Cursor **Settings → MCP**. Full guide: [MCP_SETUP.md](M
 | Private company fork | [FORK_GUIDE.md](FORK_GUIDE.md) |
 | Licensing / Pro | [LICENSING.md](LICENSING.md) |
 | Acme operator story | [examples/acme/journey.md](../examples/acme/journey.md) |
-| Triangulation | [IRA_TRIANGULATION.md](IRA_TRIANGULATION.md) |
+| Triangulation | [TRIANGULATION.md](TRIANGULATION.md) |
 
 ## Troubleshooting
 
@@ -73,6 +73,6 @@ Enable **brain-os** in Cursor **Settings → MCP**. Full guide: [MCP_SETUP.md](M
 | Port 6379 in use | Stop other Redis or change port in `docker-compose.local.yml` |
 | `brain health` DB errors | `docker compose -f docker-compose.local.yml up -d` and retry |
 | MCP not listed in Cursor | Restart Cursor after editing `.cursor/mcp.json` |
-| Lock file busy | Only one `brain` / `ira` process per data dir |
+| Lock file busy | Only one `brain` process per data dir |
 
 See [SECURITY.md](../SECURITY.md) to report issues.

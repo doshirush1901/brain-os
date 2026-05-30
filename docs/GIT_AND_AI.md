@@ -1,6 +1,6 @@
 # Git and AI — practices for Brain OS
 
-Short checklist for **humans and AI assistants** working on this repo or a **private fork**. Maintainer engine work happens in private **ira-v3** — see `docs/GIT_AND_AI.md` in that tree for the full operator runbook (pre-commit, export, gitleaks).
+Short checklist for **humans and AI assistants** working on this repo or a **private fork**. Maintainer engine work happens in the private maintainer export tree — see that tree's `docs/GIT_AND_AI.md` for the full operator runbook (pre-commit, export, gitleaks).
 
 ## Top 10 (2026)
 
@@ -11,7 +11,7 @@ Short checklist for **humans and AI assistants** working on this repo or a **pri
 | 3 | **`poetry.lock` committed** | Run `poetry check` before push |
 | 4 | **Small, intentional commits** | One logical change per commit |
 | 5 | **Synthetic data only** here | Real company data stays in **your private fork** |
-| 6 | **Pre-commit** (optional) | Copy hooks from ira-v3 or use `gitleaks protect --staged` |
+| 6 | **Pre-commit** (optional) | Copy hooks from maintainer tree or use `gitleaks protect --staged` |
 | 7 | **Use templates** | Bug / feature / design-partner issues; PR template |
 | 8 | **No force-push to `main`** | Branch protection recommended on GitHub |
 | 9 | **Deps need human approval** | No drive-by `poetry add` from agents |
@@ -41,7 +41,7 @@ Private company fork: [FORK_GUIDE.md](FORK_GUIDE.md).
 
 ## Maintainer note
 
-Changes to **engine** code should be exported from ira-v3 (`brain-os/scripts/export_brain_os.py`), not edited only here — see [CONTRIBUTING.md](../CONTRIBUTING.md).
+Changes to **engine** code should be exported from the maintainer tree (`brain-os/scripts/export_brain_os.py`), not edited only here — see [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## Related
 

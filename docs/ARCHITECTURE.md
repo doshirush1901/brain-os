@@ -1,6 +1,6 @@
 # Brain OS — architecture (public skeleton)
 
-Brain OS is a **local-first multi-agent runtime** exported from the private Ira operator stack. This public repo ships the **engine patterns** and an **Acme** synthetic demo — not a vertical OEM product.
+Brain OS is a **local-first multi-agent runtime**. This public repo ships the **engine patterns** and an **Acme** synthetic demo — not a vertical OEM product.
 
 ## Request path
 
@@ -38,9 +38,9 @@ Cursor / Claude MCP          CLI (brain ask)
 ## Boundaries
 
 - **Community tier:** document cap, tiered MCP tools — see [LICENSING.md](LICENSING.md)
-- **Private operator (Ira):** full vertical depth, live Gmail/CRM — not in this tree
+- **Private operator stack:** full vertical depth, live Gmail/CRM — not in this tree
 - **Your fork:** company `SOUL.md`, imports, and production data stay private
 
 ## Related
 
-- [QUICKSTART.md](QUICKSTART.md) · [MCP_SETUP.md](MCP_SETUP.md) · [IRA_TRIANGULATION.md](IRA_TRIANGULATION.md)
+- [QUICKSTART.md](QUICKSTART.md) · [MCP_SETUP.md](MCP_SETUP.md) · [TRIANGULATION.md](TRIANGULATION.md)

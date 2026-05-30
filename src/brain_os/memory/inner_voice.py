@@ -191,8 +191,8 @@ class InnerVoice:
                 level = "low"
             parts.append(f"{level} {t.name}")
         if not parts:
-            return "Ira has no personality traits configured."
-        return f"Ira is currently {', '.join(parts)}."
+            return "Brain OS has no personality traits configured."
+        return f"Brain OS is currently {', '.join(parts)}."
 
     def get_trait(self, trait_name: str) -> PersonalityTrait | None:
         return self._traits.get(trait_name)

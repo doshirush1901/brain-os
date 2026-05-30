@@ -1,4 +1,4 @@
-"""Add ira_segment and outbound cadence fields to CRM contacts/companies.
+"""Add operator_segment and outbound cadence fields to CRM contacts/companies.
 
 Revision ID: 019
 Revises: 018
@@ -21,7 +21,7 @@ def _add_contact_columns() -> None:
     inspector = sa.inspect(bind)
     existing = {c.get("name") for c in inspector.get_columns("contacts")}
     additions = [
-        ("ira_segment", sa.String(length=40)),
+        ("operator_segment", sa.String(length=40)),
         ("segment_updated_at", sa.DateTime()),
         ("segment_evidence", sa.Text()),
         ("last_inbound_at", sa.DateTime()),
@@ -38,8 +38,8 @@ def _add_company_columns() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
     existing = {c.get("name") for c in inspector.get_columns("companies")}
-    if "ira_segment" not in existing:
-        op.add_column("companies", sa.Column("ira_segment", sa.String(length=40), nullable=True))
+    if "operator_segment" not in existing:
+        op.add_column("companies", sa.Column("operator_segment", sa.String(length=40), nullable=True))
 
 
 def upgrade() -> None:
@@ -48,8 +48,8 @@ def upgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
     contact_indexes = {i.get("name") for i in inspector.get_indexes("contacts")}
-    if "ix_contacts_ira_segment" not in contact_indexes:
-        op.create_index("ix_contacts_ira_segment", "contacts", ["ira_segment"])
+    if "ix_contacts_operator_segment" not in contact_indexes:
+        op.create_index("ix_contacts_operator_segment", "contacts", ["operator_segment"])
     if "ix_contacts_cooldown_until" not in contact_indexes:
         op.create_index("ix_contacts_cooldown_until", "contacts", ["cooldown_until"])
 
@@ -60,8 +60,8 @@ def downgrade() -> None:
     contact_indexes = {i.get("name") for i in inspector.get_indexes("contacts")}
     if "ix_contacts_cooldown_until" in contact_indexes:
         op.drop_index("ix_contacts_cooldown_until", table_name="contacts")
-    if "ix_contacts_ira_segment" in contact_indexes:
-        op.drop_index("ix_contacts_ira_segment", table_name="contacts")
+    if "ix_contacts_operator_segment" in contact_indexes:
+        op.drop_index("ix_contacts_operator_segment", table_name="contacts")
 
     for table, cols in (
         (
@@ -73,10 +73,10 @@ def downgrade() -> None:
                 "last_inbound_at",
                 "segment_evidence",
                 "segment_updated_at",
-                "ira_segment",
+                "operator_segment",
             ],
         ),
-        ("companies", ["ira_segment"]),
+        ("companies", ["operator_segment"]),
     ):
         existing = {c.get("name") for c in inspector.get_columns(table)}
         for col in cols:

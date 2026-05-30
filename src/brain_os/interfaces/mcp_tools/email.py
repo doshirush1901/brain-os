@@ -1,6 +1,6 @@
 """Email + outbound MCP tools.
 
-Three groups of tools fronting Ira's outbound email surface:
+Three groups of tools fronting Brain OS's outbound email surface:
 
 - **Search / thread** — ``search_emails``, ``read_email_thread``
   (read ``srv._email_processor`` for Gmail introspection)
@@ -191,7 +191,7 @@ async def draft_email(
     context: str,
     as_json: bool = False,
 ) -> str:
-    """Draft a professional email using Ira's writing agent (Calliope).
+    """Draft a professional email using Brain OS's writing agent (Calliope).
 
     Provide the recipient, subject, and context/instructions for the email.
     Returns a formatted email draft.

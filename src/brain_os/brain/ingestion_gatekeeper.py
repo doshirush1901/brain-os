@@ -37,7 +37,7 @@ from brain_os.brain.ingestion_log import (
 )
 from brain_os.brain.source_identity import make_source_id
 from brain_os.contracts.memory_protocols import LongTermMemoryStoreProtocol
-from brain_os.exceptions import IngestionError, IraError
+from brain_os.exceptions import IngestionError, BrainOSError
 from brain_os.knowledge.teacher_provenance import (
     SOURCE_CATEGORY_TEACHER_CANON,
     teacher_metadata_for_corpus,
@@ -386,7 +386,7 @@ async def run_ingestion_cycle(
                             source_id=source_id,
                             result=result,
                         )
-                    except IraError as exc:
+                    except BrainOSError as exc:
                         logger.warning("Memory write failed for %s", rel_path, exc_info=True)
                         memory_result = {
                             "attempted": True,
@@ -449,11 +449,11 @@ async def run_ingestion_cycle(
         for closeable in [qdrant, graph]:
             try:
                 await closeable.close()
-            except (IraError, OSError, RuntimeError):
+            except (BrainOSError, OSError, RuntimeError):
                 logger.debug("Failed to close %s", type(closeable).__name__, exc_info=True)
         try:
             ingestor.close()
-        except (IraError, OSError, RuntimeError):
+        except (BrainOSError, OSError, RuntimeError):
             logger.debug("Failed to close ingestor", exc_info=True)
 
     summary = {

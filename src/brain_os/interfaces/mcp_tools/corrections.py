@@ -22,9 +22,9 @@ async def submit_correction(
     correct_value: str,
     category: str = "GENERAL",
 ) -> str:
-    """Submit a factual correction so Nemesis can train Ira during Dream Mode.
+    """Submit a factual correction so Nemesis can train Brain OS during Dream Mode.
 
-    Use this when Ira gets a fact wrong — pricing, specs, customer info, etc.
+    Use this when Brain OS gets a fact wrong — pricing, specs, customer info, etc.
     Valid categories: PRICING, SPECS, CUSTOMER, COMPETITOR, GENERAL.
     """
     from brain_os.brain.correction_store import CorrectionCategory, CorrectionStore

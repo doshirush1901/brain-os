@@ -1,6 +1,6 @@
 """Graphe — Logger / Scribe agent.
 
-Records Cursor chat sessions to a structured store so Ira can learn
+Records Cursor chat sessions to a structured store so Brain OS can learn
 from them during dream/sleep cycles.  Runs at the end of the pipeline
 after the response is shaped.
 """

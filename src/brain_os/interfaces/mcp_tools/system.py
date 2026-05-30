@@ -1,6 +1,6 @@
 """System status MCP tool.
 
-``get_system_status`` is Ira's introspection surface — 41 grouped snapshots
+``get_system_status`` is Brain OS's introspection surface — 41 grouped snapshots
 covering services, agents, retrieval config, data directories, store
 clients, observability, repo layout, runtime capabilities, and feature
 flags. Reads no secrets; returns presence flags and public values only.
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 async def get_system_status() -> str:
-    """Check Ira's system health and agent power levels.
+    """Check Brain OS's system health and agent power levels.
 
     Returns:
     1. ``service_health`` — Qdrant, Neo4j, PostgreSQL, OpenAI, Voyage, etc.

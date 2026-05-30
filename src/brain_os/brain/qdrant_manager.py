@@ -1,4 +1,4 @@
-"""Qdrant vector-database manager for Ira's knowledge base.
+"""Qdrant vector-database manager for Brain OS's knowledge base.
 
 Provides collection lifecycle management, batched upserts of
 :class:`~ira.data.models.KnowledgeItem` objects, dense vector search,
@@ -24,7 +24,7 @@ from qdrant_client.http.exceptions import UnexpectedResponse
 from brain_os.brain.embeddings import EmbeddingService
 from brain_os.config import QdrantConfig, get_settings
 from brain_os.data.models import KnowledgeItem
-from brain_os.exceptions import DatabaseError, IraError, LLMError
+from brain_os.exceptions import DatabaseError, BrainOSError, LLMError
 from brain_os.services.resilience import RetryPolicy, run_with_retry
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,7 @@ _QDRANT_STORE_ERRORS = (
     TypeError,
     UnexpectedResponse,
 )
-_QDRANT_EVENT_ERRORS = (IraError, OSError, TypeError, ValueError)
+_QDRANT_EVENT_ERRORS = (BrainOSError, OSError, TypeError, ValueError)
 
 _UPSERT_BATCH_SIZE = 100
 # Smaller batches for Qdrant Cloud to avoid request/payload size limits (e.g. 32MB).
@@ -920,7 +920,7 @@ class QdrantManager:
         to the cloud client. Use for one-time migration. Returns total points synced.
         """
         if self._client_cloud is None:
-            raise IraError(
+            raise BrainOSError(
                 "Qdrant cloud not configured. Set QDRANT_CLOUD_URL and QDRANT_CLOUD_API_KEY in .env"
             )
         col = collection or self._default_collection
@@ -1303,10 +1303,10 @@ def _record_to_dict(record: Any) -> dict[str, Any]:
 
 
 def _hit_to_dict(hit: models.ScoredPoint) -> dict[str, Any]:
-    """Normalise a Qdrant hit into ira-v3's canonical result schema.
+    """Normalise a Qdrant hit into maintainer-export's canonical result schema.
 
     Handles both the old ira payload layout (``text``, ``doc_type``,
-    ``filename``, ``machines``, ``prices``, …) and the new ira-v3 layout
+    ``filename``, ``machines``, ``prices``, …) and the new maintainer-export layout
     (``content``, ``source_category``, ``metadata``).
     """
     payload = hit.payload or {}

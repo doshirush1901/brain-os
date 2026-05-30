@@ -47,7 +47,7 @@ from brain_os.brain.imports_metadata_index import (
     search_index,
 )
 from brain_os.config import get_settings
-from brain_os.exceptions import IngestionError, IraError, LLMError, PathTraversalError
+from brain_os.exceptions import IngestionError, BrainOSError, LLMError, PathTraversalError
 
 logger = logging.getLogger(__name__)
 
@@ -219,7 +219,7 @@ async def _build_summary_embeddings(index: dict[str, Any]) -> dict[str, list[flo
         )
         logger.info("Built and cached %d summary embeddings", len(embeddings))
     except (
-        IraError,
+        BrainOSError,
         OSError,
         json.JSONDecodeError,
         ValueError,
@@ -372,7 +372,7 @@ async def extract_file_text(filepath: str | Path, max_chars: int = _MAX_EXTRACT_
                     lambda: fp.read_text(errors="ignore"),
                 )
                 return raw[:max_chars]
-            except (IraError, OSError, ValueError, TypeError, UnicodeError):
+            except (BrainOSError, OSError, ValueError, TypeError, UnicodeError):
                 logger.debug("Plain-text read failed for %s", fp.name)
                 return ""
         return ""
@@ -434,7 +434,7 @@ async def queue_for_deferred_ingestion(
                                 f.write("\n")
                         f.write(entry + "\n")
                     os.replace(tmp_path, str(DEFERRED_QUEUE_PATH))
-                except (IraError, OSError, ValueError, TypeError, AttributeError):
+                except (BrainOSError, OSError, ValueError, TypeError, AttributeError):
                     os.unlink(tmp_path)
                     raise
             finally:
@@ -443,7 +443,7 @@ async def queue_for_deferred_ingestion(
     try:
         await asyncio.to_thread(_write)
         logger.info("Queued %s for deferred ingestion", filename)
-    except (IngestionError, OSError, ValueError, TypeError, AttributeError, IraError) as exc:
+    except (IngestionError, OSError, ValueError, TypeError, AttributeError, BrainOSError) as exc:
         logger.warning("Failed to queue %s: %s", filename, exc)
 
 
@@ -494,7 +494,7 @@ async def mark_deferred_ingested(filepath: str) -> None:
             with os.fdopen(fd, "w") as f:
                 f.write(content)
             os.replace(tmp_path, str(DEFERRED_QUEUE_PATH))
-        except (IraError, OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
+        except (BrainOSError, OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
             try:
                 os.unlink(tmp_path)
             except OSError:

@@ -126,10 +126,10 @@ Full list: `src/brain_os/licensing/caps.py` (`COMMUNITY_MCP_TOOL_NAMES`, `PRO_MC
 
 ---
 
-## Vs private Ira
+## Vs private operator stack
 
-| | **brain-os** (this repo) | **ira-v3** (private) |
-|:--|:--------------------------|:---------------------|
+| | **brain-os** (this repo) | **Private maintainer export** |
+|:--|:--------------------------|:------------------------------|
 | MCP tools | Tiered starter set | Full operator surface (~197 tools) |
 | Data | Acme demo + your fork | Private operator production |
 

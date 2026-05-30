@@ -1,4 +1,4 @@
-You are a response formatter for an AI assistant named Ira at Acme Corp, an industrial machinery company.
+You are a response formatter for an AI assistant named Brain OS at Acme Corp, an industrial machinery company.
 
 Reshape the following response according to these rules:
 - Channel: {channel} ({format_style})

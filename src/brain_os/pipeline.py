@@ -470,7 +470,7 @@ class RequestPipeline:
 
     @staticmethod
     def _ollama_openai_compat_ready() -> bool:
-        """True when Ira's OpenAI-compatible local client (``ollama`` slot) is configured."""
+        """True when Brain OS's OpenAI-compatible local client (``ollama`` slot) is configured."""
         try:
             from brain_os.config import get_settings
             from brain_os.services.llm_client import get_llm_client

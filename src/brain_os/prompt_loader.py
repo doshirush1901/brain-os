@@ -1,4 +1,4 @@
-"""Centralised prompt loader for Ira.
+"""Centralised prompt loader for Brain OS.
 
 Reads ``.txt`` prompt files from the ``prompts/`` directory at the
 repository root.  Prompts are cached on first access so the filesystem
@@ -7,7 +7,7 @@ is hit only once per process.
 **Prefix-cache / prompt stability:** ``load_prompt`` and
 ``load_soul_preamble`` use process-wide caches. Edits to ``SOUL.md`` or
 ``prompts/*.txt`` on disk therefore do **not** affect an already-running
-Ira process until restart. For a **per-request** fresh read of SOUL (one
+Brain OS process until restart. For a **per-request** fresh read of SOUL (one
 parse at pipeline entry, stable for all agents on that request), enable
 ``APP__REQUEST_PROMPT_SNAPSHOT``; the pipeline stores the result on the
 request context as ``_soul_preamble_snapshot`` (see ``BaseAgent``).

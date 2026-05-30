@@ -1,7 +1,7 @@
 # Brain OS — visual identity (public)
 
 Public-safe brand tokens for **brain-os** README and GitHub social preview.
-Voice and operator behavior for your private OEM stack live in **Ira** (`SOUL.md` in ira-v3).
+Voice and operator behavior for your private OEM stack live in your fork's `SOUL.md`.
 
 ## Assets (this repo)
 
@@ -11,13 +11,13 @@ Voice and operator behavior for your private OEM stack live in **Ira** (`SOUL.md
 | `docs/assets/social-preview.png` | **GitHub social preview** (1280×640, ~190 KB) |
 | `docs/assets/readme-hero-neural.png` | Optional alt hero (~730 KB) |
 
-Regenerate from masters: `ira-pimp/branding/optimize_brand_assets.sh` (requires `pngquant`).
+Regenerate from masters: `private-brand-assets/branding/optimize_brand_assets.sh` (requires `pngquant`).
 | `docs/assets/brain-os-banner.svg` | Lightweight fallback if PNG too heavy for a fork |
 | `docs/assets/brain-os-logo.svg` | Compact logo / docs |
 | `docs/assets/brain-os-icon.svg` | Footer icon / favicon base |
 | `docs/assets/social-preview.svg` | Vector fallback for social card |
 
-Source masters (private ira-v3): `ira-pimp/branding/` — same filenames.
+Source masters live in the private maintainer export tree under `private-brand-assets/branding/`.
 
 ## Color tokens
 
@@ -36,12 +36,12 @@ Swatches on `readme-hero.png` match this table.
 
 Triangle + three nodes = **triangulation** (intent, relationship, identity) — product-neutral wordmark **BRAIN OS**.
 
-## Ira media (private / separate)
+## Maintainer-only media
 
-- **ira-pimp/** in ira-v3: ad concepts + `branding/` PNGs — video keyframes in `keyframes/`.
+- **private-brand-assets/** in the maintainer tree: ad concepts + `branding/` PNGs — video keyframes in `keyframes/`.
 - Do not put real customer photos from a private operator repo in this public tree.
 
 ## Do not
 
-- Use **Ira** wordmark on Brain OS customer forks without trademark review.
+- Use third-party wordmarks on Brain OS customer forks without trademark review.
 - Upload raw Mac desktop screenshots with real paths to the public repo.

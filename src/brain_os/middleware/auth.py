@@ -1,4 +1,4 @@
-"""API key authentication for Ira's FastAPI endpoints."""
+"""API key authentication for Brain OS's FastAPI endpoints."""
 
 from __future__ import annotations
 

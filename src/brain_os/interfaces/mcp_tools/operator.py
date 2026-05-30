@@ -92,7 +92,7 @@ async def operator_release(
     ttl_hours: float = 4.0,
     force: bool = False,
 ) -> str:
-    """Turn Ira loose — time-boxed release for heartbeat when APP__OPERATOR_RELEASE_REQUIRED=true."""
+    """Release autonomous mode — time-boxed release for heartbeat when APP__OPERATOR_RELEASE_REQUIRED=true."""
     from brain_os.config import get_settings
 
     inbox = _inbox()

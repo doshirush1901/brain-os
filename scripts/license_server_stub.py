@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Dev-only Brain OS license activation stub (FastAPI).
 
-Run from an exported brain-os tree or ira-v3 skeleton:
+Run from an exported brain-os tree or maintainer skeleton:
 
     poetry run python scripts/license_server_stub.py
     # → http://127.0.0.1:8765/v1/licenses/activate

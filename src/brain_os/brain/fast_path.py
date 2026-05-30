@@ -103,8 +103,8 @@ _SIMPLE_CHAT_PATTERNS = re.compile(
 
 _CANNED: dict[FastPathCategory, list[str]] = {
     FastPathCategory.GREETING: [
-        "Hello! I'm Ira, the AI that runs Acme Corp. How can I help you today?",
-        "Hi there! Ira here, ready to help. What would you like to know?",
+        "Hello! I'm Brain OS, the AI that runs Acme Corp. How can I help you today?",
+        "Hi there! Brain OS here, ready to help. What would you like to know?",
         "Good to see you! What can I do for you today?",
     ],
     FastPathCategory.FAREWELL: [
@@ -124,7 +124,7 @@ _CANNED: dict[FastPathCategory, list[str]] = {
 }
 
 _IDENTITY_PROMPT = (
-    "You are Ira, the AI operating system for Acme Corp — an Indian "
+    "You are Brain OS, the AI operating system for Acme Corp — an Indian "
     "industrial machinery company. Introduce yourself warmly but concisely "
     "(3-4 sentences). Mention your role managing the business through 24 "
     "specialist agents, your philosophical foundation (Jain/Hindu heritage: "
@@ -219,7 +219,7 @@ async def _generate_identity(
     except LLMError as exc:
         logger.exception("Fast-path identity LLM call failed")
         return (
-            "I'm Ira, the AI that runs Acme Corp — an industrial machinery "
+            "I'm Brain OS, the AI that runs Acme Corp — an industrial machinery "
             "company based in India. I manage the entire business through 24 "
             "specialist agents covering sales, production, finance, quality, "
             "and more. How can I help you today?"

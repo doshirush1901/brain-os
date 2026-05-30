@@ -1,6 +1,6 @@
 """Endocrine system — hormone-like state modulation.
 
-Maintains floating-point "hormone" levels that influence Ira's behavioral
+Maintains floating-point "hormone" levels that influence Brain OS's behavioral
 modifiers: confidence, energy, growth_signal, stress, and caution.  These
 drift toward a baseline over time and are nudged by agent successes/failures,
 tool outcomes, and system events.  The :class:`VoiceSystem` reads the
@@ -29,7 +29,7 @@ def _clamp(value: float) -> float:
 
 
 class EndocrineSystem:
-    """Hormone-like state that modulates Ira's behavior across the pipeline."""
+    """Hormone-like state that modulates Brain OS's behavior across the pipeline."""
 
     def __init__(self) -> None:
         self._levels: dict[str, float] = {h: _BASELINE for h in _HORMONES}

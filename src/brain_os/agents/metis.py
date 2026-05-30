@@ -88,7 +88,7 @@ def metis_stability_public_snapshot() -> dict[str, Any]:
 class Metis(BaseAgent):
     name = "metis"
     role = "Stability Monitor"
-    description = "Tracks response quality and determines when Ira is stable in Cursor"
+    description = "Tracks response quality and determines when Brain OS is stable in Cursor"
     knowledge_categories = []
     timeout = 15
 

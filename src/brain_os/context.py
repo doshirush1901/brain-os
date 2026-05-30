@@ -1,7 +1,7 @@
 """Unified cross-channel context manager.
 
 Tracks conversation state for each user across every channel (Email,
-CLI, API) so that Ira maintains continuity regardless of where the
+CLI, API) so that Brain OS maintains continuity regardless of where the
 user interacts.
 
 Storage is an in-memory dictionary for now; a persistent backend (Redis,

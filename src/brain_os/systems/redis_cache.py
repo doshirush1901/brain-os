@@ -1,4 +1,4 @@
-"""Shared Redis client and caching helpers for Ira.
+"""Shared Redis client and caching helpers for Brain OS.
 
 Provides :class:`RedisCache`, a thin async wrapper around ``redis.asyncio``
 that every subsystem can use for:

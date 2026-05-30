@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 async def get_agent_list() -> str:
-    """List all Ira Pantheon agents with their roles and descriptions."""
+    """List all Brain OS Pantheon agents with their roles and descriptions."""
     from brain_os.interfaces import mcp_server as srv
 
     await srv._ensure_initialized()
@@ -46,7 +46,7 @@ async def get_agent_list() -> str:
 
 
 async def ask_agent(agent_name: str, question: str, handoff_json: str = "") -> str:
-    """Ask a specific Ira agent a question directly.
+    """Ask a specific Brain OS agent a question directly.
 
     Available agents include: athena, clio, prometheus, hephaestus,
     plutus, calliope, vera, hermes, atlas, quotebuilder, and others.

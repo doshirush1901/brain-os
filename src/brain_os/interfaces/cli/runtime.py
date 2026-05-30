@@ -1,4 +1,4 @@
-"""Minimal async helpers for Brain OS CLI (extracted from Ira cli_runtime)."""
+"""Minimal async helpers for Brain OS CLI (extracted from operator cli_runtime)."""
 
 from __future__ import annotations
 

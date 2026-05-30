@@ -1,6 +1,6 @@
 """Memory MCP tools.
 
-Tools backed by Ira's memory subsystems:
+Tools backed by Brain OS's memory subsystems:
 
 - ``_long_term_memory`` — Mem0 semantic store (``recall_memory``, ``store_memory``)
 - ``_conversation_memory`` — recent-history buffer (``get_conversation_history``)
@@ -41,7 +41,7 @@ def _resolve_long_term_memory() -> Any:
 
 
 async def recall_memory(query: str, user_id: str = "global", limit: int = 5) -> str:
-    """Search Ira's long-term semantic memory (Mem0).
+    """Search Brain OS's long-term semantic memory (Mem0).
 
     Returns relevant memories with content, score, and metadata.
     Use for recalling facts, preferences, and learned information.
@@ -62,7 +62,7 @@ async def recall_memory(query: str, user_id: str = "global", limit: int = 5) -> 
 
 
 async def store_memory(content: str, user_id: str = "global", metadata: str = "") -> str:
-    """Store a fact or learning in Ira's long-term memory.
+    """Store a fact or learning in Brain OS's long-term memory.
 
     Provide the content to remember and an optional metadata JSON string
     (e.g. '{"source": "meeting", "topic": "pricing"}').
@@ -107,7 +107,7 @@ async def get_conversation_history(
 
 
 async def check_relationship(contact_name: str) -> str:
-    """Look up Ira's relationship profile with a contact.
+    """Look up Brain OS's relationship profile with a contact.
 
     Returns warmth level, interaction count, memorable moments,
     learned preferences, and interaction dates.

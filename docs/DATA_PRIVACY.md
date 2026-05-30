@@ -1,8 +1,8 @@
-# Data privacy — Ira deployments
+# Data privacy — Brain OS deployments
 
-## What Ira may process
+## What Brain OS may process
 
-Depending on enabled integrations, Ira-class stacks may touch:
+Depending on enabled integrations, Brain OS-class stacks may touch:
 
 - Mailbox contents (headers, bodies, attachments metadata)
 - CRM rows (contacts, deals, interactions)
@@ -26,7 +26,7 @@ Depending on enabled integrations, Ira-class stacks may touch:
 
 ## Customer rights & retention
 
-Operators remain responsible for GDPR/CCPA-style obligations (access, deletion, retention). Ira stores embeddings and CRM mirrors — deletion must span DB + vector stores + caches.
+Operators remain responsible for GDPR/CCPA-style obligations (access, deletion, retention). Brain OS stores embeddings and CRM mirrors — deletion must span DB + vector stores + caches.
 
 ## Incident mindset
 

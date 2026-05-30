@@ -1,4 +1,4 @@
-"""Skill matrix and public API for the Ira skills subsystem.
+"""Skill matrix and public API for the Brain OS skills subsystem.
 
 Each key in :data:`SKILL_MATRIX` is a snake_case skill name that maps to a
 human-readable description.  The corresponding async handler lives in

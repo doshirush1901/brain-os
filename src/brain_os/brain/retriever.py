@@ -1,4 +1,4 @@
-"""Unified retrieval layer for the Ira system.
+"""Unified retrieval layer for the Brain OS system.
 
 **No agent should query Qdrant or Neo4j directly.**  Every knowledge lookup
 flows through :class:`UnifiedRetriever`, which fans out across the vector
@@ -36,7 +36,7 @@ from brain_os.brain.retrieval_eval import keyword_overlap_score
 from brain_os.brain.retrieval_slo import merge_backend_timeouts
 from brain_os.brain.retrieval_trace import emit_retrieval_trace
 from brain_os.config import get_settings
-from brain_os.exceptions import DatabaseError, IngestionError, IraError, LLMError
+from brain_os.exceptions import DatabaseError, IngestionError, BrainOSError, LLMError
 from brain_os.prompt_loader import load_prompt
 from brain_os.schemas.llm_outputs import EntityNames, SubQueries
 from brain_os.services.llm_client import get_llm_client
@@ -360,7 +360,7 @@ def flashrank_cache_probe() -> dict[str, Any]:
 
 
 class UnifiedRetriever:
-    """Single entry-point for all knowledge retrieval in Ira."""
+    """Single entry-point for all knowledge retrieval in Brain OS."""
 
     def __init__(
         self,
@@ -536,7 +536,7 @@ class UnifiedRetriever:
                         merged.extend(discovered)
                 except (
                     TimeoutError,
-                    IraError,
+                    BrainOSError,
                     DatabaseError,
                     httpx.HTTPError,
                     OSError,
@@ -1028,7 +1028,7 @@ class UnifiedRetriever:
                 return ranked
             except (
                 TimeoutError,
-                IraError,
+                BrainOSError,
                 httpx.HTTPError,
                 OSError,
                 ValueError,
@@ -1166,7 +1166,7 @@ class UnifiedRetriever:
             )
         except (
             TimeoutError,
-            IraError,
+            BrainOSError,
             OSError,
             RuntimeError,
             ValueError,
@@ -1259,7 +1259,7 @@ class UnifiedRetriever:
             )
             return injected + results
         except (
-            IraError,
+            BrainOSError,
             OSError,
             ValueError,
             TypeError,

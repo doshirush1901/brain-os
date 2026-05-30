@@ -1,6 +1,6 @@
 """Learning hub — feedback processing, gap analysis, and procedure suggestion.
 
-Closes the feedback loop for the Ira system.  After every interaction the
+Closes the feedback loop for the Brain OS system.  After every interaction the
 LearningHub can:
 
 * Record and analyse user feedback (scores + optional corrections).

@@ -24,7 +24,7 @@ from typing import Any, TypeVar
 
 import httpx
 
-from brain_os.exceptions import ConfigurationError, IraError
+from brain_os.exceptions import ConfigurationError, BrainOSError
 from brain_os.service_keys import ServiceKey as SK
 from brain_os.services.resilience import RetryPolicy, run_with_retry
 
@@ -445,7 +445,7 @@ async def _build_pipeline(
         healthy = all(v.get("status") == "healthy" for v in health_report.values())
         status = "ALL HEALTHY" if healthy else "DEGRADED"
         logger.info("CLI startup validation: %s — %s", status, list(health_report))
-    except (IraError, Exception):
+    except (BrainOSError, Exception):
         logger.exception("CLI startup validation failed — continuing in degraded mode")
 
     redis_cache = None

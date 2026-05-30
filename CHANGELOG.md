@@ -8,7 +8,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- Public export from Ira v3: 17-step pipeline, slim pantheon (~20 agents), Community / Pro licensing.
+- Public export: 17-step pipeline, slim pantheon (~20 agents), Community / Pro licensing.
 - **Acme** synthetic demo: CRM seed, journey, proof registry, product docs.
 - Mac bootstrap: `scripts/macpro/bootstrap.sh`, Docker Compose stack (Postgres, Qdrant, Neo4j, Redis).
 - CLI: `brain ask`, `brain health`, `brain seed-acme`, `brain activate --trial`, `brain mcp`.

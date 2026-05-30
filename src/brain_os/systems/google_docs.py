@@ -1,4 +1,4 @@
-"""Google Docs, Drive & Calendar integration for Ira.
+"""Google Docs, Drive & Calendar integration for Brain OS.
 
 Provides :class:`GoogleDocsService`, an async wrapper around the Google
 Docs API (v1), Drive API (v3), and Calendar API (v3) that any agent or

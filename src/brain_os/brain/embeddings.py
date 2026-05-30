@@ -1,4 +1,4 @@
-"""Primary embedding service for all vector operations in Ira.
+"""Primary embedding service for all vector operations in Brain OS.
 
 Every component that needs to convert text into dense vectors — the Qdrant
 manager, the retriever, the document ingestor, sales intelligence — goes

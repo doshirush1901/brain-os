@@ -1,4 +1,4 @@
-"""Google Document AI integration for Ira.
+"""Google Document AI integration for Brain OS.
 
 Provides :class:`DocumentAIService`, an async wrapper around the
 Document AI REST API for OCR, invoice parsing, and form extraction.

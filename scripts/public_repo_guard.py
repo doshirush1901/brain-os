@@ -211,6 +211,15 @@ _COMMERCIAL_SCAN_PREFIXES = ("scripts/",)
 _IDENTITY_SCAN_PREFIXES = ("src/", "prompts/")
 _HOME_PATH_FRAGMENTS = ("/users/", "/home/", "desktop/ira-v3", "desktop/ira-v3")
 _IDENTITY_LITERALS = ("rushabh@", "rushabh doshi")
+_DEIRA_FRAGMENTS = (
+    "ira-v3",
+    "ira-universe",
+    "query_ira",
+    "ira_segment",
+    "ira-pimp",
+    "iraerror",
+)
+_DEIRA_BRAND_PREFIXES = ("src/", "prompts/", "docs/")
 _VERTICAL_FRAGMENTS = (
     "machinecraft.org",
     "machinecraft.in",
@@ -253,8 +262,21 @@ def _scan_public_identity(rel: str, text: str, hits: list[str]) -> None:
         hits.append(f"{rel}: forbidden token `machinecraft`")
 
 
+def _scan_deira_branding(rel: str, text: str, hits: list[str]) -> None:
+    """Public brain-os must not reference the Ira operator product by name."""
+    if not rel.startswith(_DEIRA_BRAND_PREFIXES):
+        return
+    lower = text.lower()
+    for frag in _DEIRA_FRAGMENTS:
+        if frag in lower:
+            hits.append(f"{rel}: forbidden Ira-brand fragment `{frag}`")
+    if re.search(r"\bIra\b", text):
+        hits.append(f"{rel}: forbidden brand token `Ira`")
+
+
 def _scan_text(rel: str, text: str, allow: dict, hits: list[str]) -> None:
     _scan_public_identity(rel, text, hits)
+    _scan_deira_branding(rel, text, hits)
     lower = text.lower()
     for frag in _ORG_EMAIL_DOMAIN_FRAGMENTS:
         if frag.lower() in lower:

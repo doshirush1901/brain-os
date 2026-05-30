@@ -27,7 +27,7 @@ from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any
 
-from brain_os.exceptions import IraError
+from brain_os.exceptions import BrainOSError
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -171,7 +171,7 @@ def _resolve_repo_attachment(rel_or_abs: str) -> Path:
     p = Path(rel_or_abs).expanduser()
     out = p.resolve() if p.is_absolute() else (_REPO_ROOT / p).resolve()
     if not out.is_file():
-        raise IraError(f"Attachment not found or not a file: {out}")
+        raise BrainOSError(f"Attachment not found or not a file: {out}")
     return out
 
 

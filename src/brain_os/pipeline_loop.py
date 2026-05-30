@@ -1,7 +1,7 @@
 """
 pipeline_loop.py — Iterative Agent Loop (OpenManus-inspired)
 
-This module adds an iterative Plan-Execute-Observe loop on top of Ira's
+This module adds an iterative Plan-Execute-Observe loop on top of Brain OS's
 existing RequestPipeline. Instead of a single fire-and-forget pass, the
 loop allows Athena to:
 
@@ -765,7 +765,7 @@ class AgentLoop:
     async def compile(
         self,
         plan: Plan,
-        title: str = "Ira Report",
+        title: str = "Brain OS Report",
         on_progress: ProgressCallback = None,
     ) -> str:
         """Synthesize all phase results into a final output.

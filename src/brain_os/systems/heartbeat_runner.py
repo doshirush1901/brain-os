@@ -28,7 +28,7 @@ from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy.exc import SQLAlchemyError
 
 from brain_os.config import get_settings
-from brain_os.exceptions import IraError
+from brain_os.exceptions import BrainOSError
 from brain_os.systems.llm_budget import (
     add_monthly_usage,
     check_budget_allows,
@@ -39,7 +39,7 @@ from brain_os.systems.llm_budget import (
 logger = logging.getLogger(__name__)
 
 _HEARTBEAT_JOB_ERRORS = (
-    IraError,
+    BrainOSError,
     SQLAlchemyError,
     PydanticValidationError,
     OSError,

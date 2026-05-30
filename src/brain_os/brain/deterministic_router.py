@@ -1,4 +1,4 @@
-"""Fast, pattern-based intent router for Ira.
+"""Fast, pattern-based intent router for Brain OS.
 
 Before invoking an LLM to decide which agents should handle a query, the
 :class:`DeterministicRouter` attempts a cheap keyword/regex classification.

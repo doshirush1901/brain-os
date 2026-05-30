@@ -1,4 +1,4 @@
-# Public vs private boundary (Ira reference repo)
+# Public vs private boundary (Brain OS reference repo)
 
 This GitHub repository is intended as a **synthetic demo / reference architecture** for an AI-assisted manufacturing sales intelligence stack.
 
@@ -28,9 +28,9 @@ This GitHub repository is intended as a **synthetic demo / reference architectur
 
 Rotating credentials and rewriting git history after any leak is covered in `docs/GIT_HISTORY_REWRITE_GUIDE.md`.
 
-## Ira Universe (public slim repo)
+## Brain OS Universe (public slim repo)
 
-The separate **[ira-universe](https://github.com/doshirush1901/ira-universe)** repository is **not** a copy of full `ira-v3`. It ships only:
+The separate **[](https://github.com/doshirush1901/brain-os)** repository is **not** a copy of full `maintainer-export`. It ships only:
 
 - `src/ira_universe/` — visitor MCP (~12 tools, allowlisted corpus)
 - Public docs (including `IRA_BIRTH_CERTIFICATE.md`, `CURSOR_AGENTIC_LOOP.md`, `TIMEOUT_MODEL.md`, `PIPELINE_AUDIT.md` excerpt, `CURSOR_WORKFLOWS.md` excerpt), synthetic demos, and `examples/marketing/case_study_workflow.md`
@@ -38,7 +38,7 @@ The separate **[ira-universe](https://github.com/doshirush1901/ira-universe)** r
 
 Regenerate and publish: `bash scripts/republish_ira_universe.sh` (incremental export, test, commit, push). One-time history reset: `bash scripts/republish_ira_universe_clean.sh`. Export only: `python scripts/export_ira_universe_repo.py`.
 
-**Archive repo:** Keep `ira-universe-archived-monolith` **private** (old monolith + PSG history). Public clone/share only `https://github.com/doshirush1901/ira-universe`.
+**Archive repo:** Keep `-archived-monolith` **private** (old monolith + PSG history). Public clone/share only `https://github.com/doshirush1901/brain-os`.
 
 ## Named case studies (e.g. PSG)
 

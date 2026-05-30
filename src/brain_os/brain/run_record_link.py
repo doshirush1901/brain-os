@@ -10,7 +10,7 @@ from typing import Any
 
 from brain_os.brain.run_record_access import fetch_run_record, run_records_enabled
 from brain_os.brain.run_record_store import RunRecordStore
-from brain_os.exceptions import IraError
+from brain_os.exceptions import BrainOSError
 from brain_os.schemas.run_record import RunRecord
 
 logger = logging.getLogger(__name__)
@@ -50,7 +50,7 @@ async def append_run_link(
         links.append({"kind": kind, "ts": time.time(), **(detail or {})})
         record.artifacts.links = links
         await st.save(record)
-    except (IraError, OSError, ValueError, TypeError, json.JSONDecodeError):
+    except (BrainOSError, OSError, ValueError, TypeError, json.JSONDecodeError):
         logger.debug("append_run_link failed run_id=%s kind=%s", rid, kind, exc_info=True)
 
 

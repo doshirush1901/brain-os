@@ -1,6 +1,6 @@
-# Ira triangulation and hexagolation
+# Brain OS triangulation and hexagolation
 
-How to get ImportYeti-quality convergence inside Ira: independent evidence legs that must agree before you label, draft, or send.
+How to get ImportYeti-quality convergence inside Brain OS: independent evidence legs that must agree before you label, draft, or send.
 
 This runbook is the **operational form** of [SOUL.md](../SOUL.md) **Philosophical Foundation** — especially **Anekantavada** (many-sided truth; no single source) and **Syadvada** (cite the facet you used; state gaps). See [AGENTS.md](../AGENTS.md) § SOUL in operations.
 
@@ -8,7 +8,7 @@ This runbook is the **operational form** of [SOUL.md](../SOUL.md) **Philosophica
 
 ## ImportYeti analogy
 
-| ImportYeti | Ira |
+| ImportYeti | Brain OS |
 |:-----------|:----|
 | HS codes (product class) | **Intent** — machine, material, thickness, application; quotes/PDFs; lead CSV; scrape |
 | Named Asian shippers (supply anchor) | **Relationship** — CRM stage, deals, Gmail sent/received, Demo-Programme / hot board |
@@ -70,17 +70,17 @@ Draft only until explicit **send**. See [PERSUASION_SPRINT.md](PERSUASION_SPRINT
 
 ## Context budget and cascade
 
-Long mailboxes, large KB hits, and multi-agent ReAct all behave like **long context**: cost grows when you let every tool see everything. Ira’s answer is not a bigger window — it is a **cascade**: coarse evidence first, a **fixed budget** gather, then the expensive LLM step only on that pack.
+Long mailboxes, large KB hits, and multi-agent ReAct all behave like **long context**: cost grows when you let every tool see everything. Brain OS’s answer is not a bigger window — it is a **cascade**: coarse evidence first, a **fixed budget** gather, then the expensive LLM step only on that pack.
 
-This is the same shape as [selection-based hierarchical attention](https://nousresearch.com/lighthouse-attention) (pyramid pool → top-K → dense attention on the gather → optional full-attention resume). Ira does not implement that kernel; operators use the cascade below.
+This is the same shape as [selection-based hierarchical attention](https://nousresearch.com/lighthouse-attention) (pyramid pool → top-K → dense attention on the gather → optional full-attention resume). Brain OS does not implement that kernel; operators use the cascade below.
 
 ### Mental model
 
-| Symbol | Ira meaning |
+| Symbol | Brain OS meaning |
 |:-------|:------------|
 | **N** | Full history available (Gmail threads, KB corpus, CRM timeline, graph neighborhood) |
 | **S** | Bounded pack passed to agents (account brief, journey summary, top-K retrieval, precedents) |
-| **Expensive step** | `ira ask` / `query_ira`, ReAct loops, Calliope draft, dual faithfulness, `--deep` Argus |
+| **Expensive step** | `ira ask` / `query_brain`, ReAct loops, Calliope draft, dual faithfulness, `--deep` Argus |
 
 **Goal:** keep **S ≪ N** on routine turns; escalate to a larger S or full pipeline only when the action warrants it (send, quote, dispute, board prep).
 
@@ -98,7 +98,7 @@ This is the same shape as [selection-based hierarchical attention](https://nousr
 **Rules**
 
 1. **Climb one level at a time** — do not open level 5 if level 1 still has UNVERIFIED triangle legs.
-2. **Selection outside the pipeline** — use level-1 **front doors** ([MCP_OPERATOR_GUIDE.md](MCP_OPERATOR_GUIDE.md)); do not replace `get_account_brief` with five `search_emails` + `query_ira` calls that re-read the same threads.
+2. **Selection outside the pipeline** — use level-1 **front doors** ([MCP_OPERATOR_GUIDE.md](MCP_OPERATOR_GUIDE.md)); do not replace `get_account_brief` with five `search_emails` + `query_brain` calls that re-read the same threads.
 3. **Symmetric legs** — the brief pack should balance **Intent, Relationship, Identity** (and hex legs at level 4). Relationship-only cascades (mail dump without KB/domain) are the analogue of asymmetric sparse attention: fast but misaligned for drafting.
 4. **Dense resume** — a cheap brief path must still be able to escalate: `--deep`, full hex, and non-heuristic faithfulness before **send**. If sparse prep hollowed out quality, level 5 is where you recover (same role as Lighthouse’s SDPA-resume tail).
 
@@ -158,7 +158,7 @@ Parent–child / hierarchical chunks (coarse deal summary → fine quote text) a
 
 | Pattern | Why it fails |
 |:--------|:-------------|
-| `query_ira` on a named account without `ira brief` first | Pays **N** (full pipeline + ReAct) to rebuild **S** |
+| `query_brain` on a named account without `ira brief` first | Pays **N** (full pipeline + ReAct) to rebuild **S** |
 | Multiple agents each calling `search_emails` on the same domain | No shared gather; **S** duplicated per agent |
 | `ira brief` then immediate **send** with hex legs empty | Skipped level 4–5 recoverability |
 | `APP__FAITHFULNESS_HEURISTIC_ONLY=true` during send week | Saves tokens but removes dense resume on claims |
@@ -190,7 +190,7 @@ Map columns: process/material → **Intent**; known tier-1/OEM → **Relationshi
 
 Before a card is shown, **ICP gate** (`APP__TINDER_ICP_GATE_ENABLED`, default true) classifies the domain (cached site profile + optional scrape + `ThermoformerLeadClassification`). Non-buyers at confidence ≥ `APP__TINDER_ICP_AUTO_SKIP_MIN_CONFIDENCE` (default 0.85) are auto-skipped (`left` with note). Company card shows **ICP verdict**; `ira tinder draft` requires `icp_approved`.
 
-On **right draft**, Ira runs the triangle plus **ICP buyer-fit** (`icp_buyer_fit` leg) and passes gaps to Calliope. Config: `APP__TINDER_TRIANGULATE_BEFORE_DRAFT` (default true), `APP__TINDER_TRIANGULATE_DEEP` (Argus, default false). CLI: `ira tinder draft --no-triangulate` to skip; `--deep` for Argus; `ira tinder start --no-icp-gate` to disable classifier.
+On **right draft**, Brain OS runs the triangle plus **ICP buyer-fit** (`icp_buyer_fit` leg) and passes gaps to Calliope. Config: `APP__TINDER_TRIANGULATE_BEFORE_DRAFT` (default true), `APP__TINDER_TRIANGULATE_DEEP` (Argus, default false). CLI: `ira tinder draft --no-triangulate` to skip; `--deep` for Argus; `ira tinder start --no-icp-gate` to disable classifier.
 
 ## Enforcement (outbound + pipeline)
 
@@ -208,7 +208,7 @@ Consumer inboxes (gmail.com, etc.) with no company hint skip the gate (personal 
 
 ## Quantitative layer (advisory)
 
-After **level 1** (triangle brief) and before acting on outbound at **level 4**, Ira can attach **deterministic scores** that do not replace evidence:
+After **level 1** (triangle brief) and before acting on outbound at **level 4**, Brain OS can attach **deterministic scores** that do not replace evidence:
 
 | Step | Tool | Registry IDs |
 |:-----|:-----|:---------------|
@@ -227,5 +227,5 @@ After **level 1** (triangle brief) and before acting on outbound at **level 4**,
 - [LLM_COST_OPTIMIZATION.md](LLM_COST_OPTIMIZATION.md) — ReAct / parallel caps vs cascade level
 - [CONTEXT_GRAPH.md](CONTEXT_GRAPH.md) — precedents, 1-hop expand, similar companies
 - [MCP_OPERATOR_GUIDE.md](MCP_OPERATOR_GUIDE.md) — triangulation front doors
-- [IRA_FORMULA_REGISTRY.md](IRA_FORMULA_REGISTRY.md) — top 10 Ira-built formulas + triangulation mapping
+- [IRA_FORMULA_REGISTRY.md](IRA_FORMULA_REGISTRY.md) — top 10 Brain OS-built formulas + triangulation mapping
 - [MATH_MODE_V1.md](MATH_MODE_V1.md) — readiness / cadence / priority scoring

@@ -1,6 +1,6 @@
 # Timeout Model — Total, Sub-Agents, and Athena Synthesis
 
-Ira uses a layered timeout model so that within a **total** time budget, **sub-agents** run in parallel (each with a slot), and **Athena** has her own time to package the final answer for Cursor/API.
+Brain OS uses a layered timeout model so that within a **total** time budget, **sub-agents** run in parallel (each with a slot), and **Athena** has her own time to package the final answer for Cursor/API.
 
 ---
 
@@ -22,7 +22,7 @@ Ira uses a layered timeout model so that within a **total** time budget, **sub-a
 
 **Optional shorter cap for simple prompts:** When `APP__DYNAMIC_PIPELINE_TIMEOUT=true`, the outer `asyncio.wait_for` budget may use `APP__PIPELINE_TIMEOUT_QUICK` (capped by `APP__PIPELINE_TIMEOUT`) for short single-line queries without “deep” substrings — see `_effective_pipeline_timeout_seconds` in `src/brain_os/pipeline.py`.
 
-**Future: Ira/Athena chooses total by request type.**
+**Future: Brain OS/Athena chooses total by request type.**
 Further tuning (e.g. intent-classified presets) can build on the same hook.
 
 ---

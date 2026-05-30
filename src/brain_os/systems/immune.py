@@ -23,7 +23,7 @@ from brain_os.brain.embeddings import EmbeddingService
 from brain_os.brain.knowledge_graph import KnowledgeGraph
 from brain_os.brain.qdrant_manager import QdrantManager, _is_qdrant_transport_error
 from brain_os.config import get_settings
-from brain_os.exceptions import IraError
+from brain_os.exceptions import BrainOSError
 
 logger = logging.getLogger(__name__)
 
@@ -455,7 +455,7 @@ class ImmuneSystem:
             TypeError,
             ValueError,
             httpx.HTTPError,
-            IraError,
+            BrainOSError,
         ):
             logger.warning("KnowledgeHealthMonitor not available", exc_info=True)
 

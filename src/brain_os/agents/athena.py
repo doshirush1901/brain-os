@@ -17,7 +17,7 @@ from brain_os.agents.base_agent import (
     AgentTool,
     BaseAgent,
 )
-from brain_os.exceptions import IraError, ToolExecutionError
+from brain_os.exceptions import BrainOSError, ToolExecutionError
 from brain_os.prompt_loader import load_prompt
 from brain_os.schemas.llm_outputs import TaskPlan
 from brain_os.service_keys import ServiceKey as SK
@@ -67,7 +67,7 @@ class Athena(BaseAgent):
         self.register_tool(
             AgentTool(
                 name="get_system_health",
-                description="Check the health status of all Ira subsystems.",
+                description="Check the health status of all Brain OS subsystems.",
                 parameters={},
                 handler=self._tool_system_health,
             )
@@ -115,7 +115,7 @@ class Athena(BaseAgent):
             AgentTool(
                 name="describe_skill",
                 description=(
-                    "Load the one-line purpose and optional extended playbook for a shared Ira skill "
+                    "Load the one-line purpose and optional extended playbook for a shared Brain OS skill "
                     "(snake_case name from the SHARED_SKILLS list). Use when routing depends on what "
                     "a skill does; specialists still execute skills via their own tools."
                 ),
@@ -190,7 +190,7 @@ class Athena(BaseAgent):
                 f"Participants: {', '.join(minutes.participants)}\n"
                 f"Synthesis: {minutes.synthesis}"
             )
-        except (TimeoutError, ToolExecutionError, IraError, RuntimeError, ValueError) as exc:
+        except (TimeoutError, ToolExecutionError, BrainOSError, RuntimeError, ValueError) as exc:
             return f"Board meeting failed: {exc}"
 
     async def _tool_system_health(self) -> str:
@@ -204,7 +204,7 @@ class Athena(BaseAgent):
                 s = status.get("status", "unknown")
                 lines.append(f"  {svc}: {s}")
             return "System health:\n" + "\n".join(lines)
-        except (IraError, OSError, RuntimeError, ValueError, TypeError, AttributeError) as exc:
+        except (BrainOSError, OSError, RuntimeError, ValueError, TypeError, AttributeError) as exc:
             return f"Health check failed: {exc}"
 
     async def _tool_run_governance_check(

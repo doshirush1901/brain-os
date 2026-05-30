@@ -16,7 +16,7 @@ from brain_os.agents.base_agent import AgentTool, BaseAgent
 from brain_os.agents.creative_react_tools import register_creative_mind_tools
 from brain_os.agents.formula_react_tools import register_formula_tools
 from brain_os.agents.pf1_react_tools import register_pf1_icp_tools
-from brain_os.exceptions import DatabaseError, IraError
+from brain_os.exceptions import DatabaseError, BrainOSError
 from brain_os.prompt_loader import load_prompt
 from brain_os.service_keys import ServiceKey as SK
 from brain_os.services import sales_decisions as sd
@@ -663,7 +663,7 @@ class Prometheus(BaseAgent):
                 if health:
                     return f"Customer health: {health}"
             return "(No customer health data available for this contact.)"
-        except (IraError, Exception) as exc:
+        except (BrainOSError, Exception) as exc:
             logger.debug("SalesIntelligence not available: %s", exc)
             return (
                 f"Error: Could not retrieve customer health; SalesIntelligence unavailable ({exc})."

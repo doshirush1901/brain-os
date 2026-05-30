@@ -18,7 +18,7 @@ from typing import Any
 import aiofiles
 
 from brain_os.brain.knowledge_graph import KnowledgeGraph
-from brain_os.exceptions import DatabaseError, IraError
+from brain_os.exceptions import DatabaseError, BrainOSError
 
 logger = logging.getLogger(__name__)
 
@@ -334,7 +334,7 @@ class GraphConsolidation:
             stats["relationship_noise_removed"] = await self.cleanup_relationship_noise()
 
             stats["status"] = "success"
-        except IraError:
+        except BrainOSError:
             logger.exception("Graph consolidation failed")
             stats["status"] = "error"
 

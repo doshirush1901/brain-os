@@ -63,7 +63,7 @@ def init_workspace_files(workspace: Path, *, task_id: str, goal: str) -> None:
     (workspace / "README.md").write_text(readme, encoding="utf-8")
 
     memories_header = (
-        "# Task memory (orchestrator)\n\nAppend-only log written by Ira's task orchestrator.\n"
+        "# Task memory (orchestrator)\n\nAppend-only log written by Brain OS's task orchestrator.\n"
     )
     (workspace / "MEMORIES.md").write_text(memories_header, encoding="utf-8")
 

@@ -11,7 +11,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from brain_os.exceptions import IraError, LLMError
+from brain_os.exceptions import BrainOSError, LLMError
 from brain_os.prompt_loader import load_prompt
 from brain_os.services.llm_client import get_llm_client
 
@@ -102,9 +102,9 @@ class GapResolver:
                             if url:
                                 page_content = await scrape_fn(url)
                                 search_context += f"\n\nFull page:\n{page_content[:2000]}"
-                        except IraError:
+                        except BrainOSError:
                             logger.debug("Scrape failed during gap resolution", exc_info=True)
-            except IraError:
+            except BrainOSError:
                 logger.warning("Web search failed during gap resolution", exc_info=True)
 
         user_msg = (
@@ -138,13 +138,13 @@ class GapResolver:
                 confidence=0.6,
                 mem0_user_id=_muid,
             )
-        except IraError:
+        except BrainOSError:
             logger.warning("Failed to store resolved gap fact", exc_info=True)
 
         if self._metacognition is not None and gap_id is not None:
             try:
                 await self._metacognition.mark_gap_resolved(gap_id, resolution)
-            except IraError:
+            except BrainOSError:
                 logger.warning("Failed to mark gap #%s as resolved", gap_id, exc_info=True)
 
         logger.info("Resolved gap: %s -> %s", query[:60], resolution[:80])

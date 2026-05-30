@@ -18,7 +18,7 @@ from collections import defaultdict
 from typing import Any
 
 from brain_os.config import get_settings
-from brain_os.exceptions import DatabaseError, IraError
+from brain_os.exceptions import DatabaseError, BrainOSError
 from brain_os.service_keys import ServiceKey as SK
 from brain_os.services.tool_runner import is_retryable_transient, run_tool
 from brain_os.skills import SKILL_MATRIX
@@ -658,7 +658,7 @@ async def draft_proposal(**kwargs: Any) -> str:
                     f"{ep.get('low', '?')} – {ep.get('high', '?')} "
                     f"(mid: {ep.get('mid', '?')})"
                 )
-        except (IraError, Exception):
+        except (BrainOSError, Exception):
             logger.debug("Pricing engine not available for proposal", exc_info=True)
 
     return await _llm_call(
@@ -766,7 +766,7 @@ async def lookup_machine_spec(**kwargs: Any) -> str:
             for model_key, specs in catalog.items():
                 if machine.upper() in model_key.upper():
                     return _json.dumps({"model": model_key, **specs}, indent=2)
-    except (IraError, Exception):
+    except (BrainOSError, Exception):
         logger.debug("Machine knowledge lookup failed for %s", machine, exc_info=True)
 
     return f"No specs found for {machine}"

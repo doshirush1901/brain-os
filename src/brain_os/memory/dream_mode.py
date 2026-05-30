@@ -38,7 +38,7 @@ import aiosqlite
 
 from brain_os.contracts.dream_brain_hooks import DreamBrainHooks, DreamStageContext
 from brain_os.data.models import DreamReport
-from brain_os.exceptions import DatabaseError, IraError, LLMError
+from brain_os.exceptions import DatabaseError, BrainOSError, LLMError
 from brain_os.memory.conversation import ConversationMemory
 from brain_os.memory.dream_mode_checkpoint import (
     load_dream_checkpoint,
@@ -447,7 +447,7 @@ class DreamMode:
                 "episodes_created": len(episodes),
                 "memories_consolidated": memories_consolidated,
             }
-        except (IraError, Exception):
+        except (BrainOSError, Exception):
             logger.exception("Dream Stage 2 (episodic consolidation) failed")
             stage_log["stages"]["2_episodic_consolidation"] = {"status": "error"}
 
@@ -719,7 +719,7 @@ class DreamMode:
                 "status": "ok",
                 "procedures_created": procedures_created,
             }
-        except (IraError, Exception):
+        except (BrainOSError, Exception):
             logger.exception("Dream Stage 4 (procedural learning) failed")
             stage_log["stages"]["4_procedural_learning"] = {"status": "error"}
 
@@ -990,7 +990,7 @@ class DreamMode:
 
             logger.info("Stage 10: %s", "\n".join(lines))
             stage_log["stages"]["10_morning_summary"] = {"status": "ok"}
-        except (IraError, Exception):
+        except (BrainOSError, Exception):
             logger.exception("Dream Stage 10 (morning summary) failed")
             stage_log["stages"]["10_morning_summary"] = {"status": "error"}
 
@@ -1036,7 +1036,7 @@ class DreamMode:
 
             try:
                 learnings = await self._llm.generate_text(
-                    "You extract learnings from Cursor session logs for Ira.",
+                    "You extract learnings from Cursor session logs for Brain OS.",
                     learning_prompt,
                     name="dream.cursor_session_learning",
                 )
@@ -1181,7 +1181,7 @@ class DreamMode:
                 len(agent_names),
                 "last_24h" if journal_last_24h else "today",
             )
-        except (IraError, Exception):
+        except (BrainOSError, Exception):
             logger.exception("Dream Stage 11 (agent journaling) failed")
             stage_log["stages"]["11_agent_journaling"] = {"status": "error"}
 

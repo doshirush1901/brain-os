@@ -28,7 +28,7 @@ from langfuse.decorators import observe
 from pydantic import ValidationError
 
 from brain_os.config import get_settings
-from brain_os.exceptions import IraError
+from brain_os.exceptions import BrainOSError
 from brain_os.schemas.llm_outputs import ClarityAssessment, TaskPlan, TaskPlanPhase
 from brain_os.systems import task_workspace as tw
 from brain_os.systems.phase_contract import (
@@ -230,7 +230,7 @@ class TaskOrchestrator:
 
         except (
             TimeoutError,
-            IraError,
+            BrainOSError,
             OSError,
             RuntimeError,
             ValueError,
@@ -288,7 +288,7 @@ class TaskOrchestrator:
             return await self._plan_and_execute(task_id, state, on_progress)
         except (
             TimeoutError,
-            IraError,
+            BrainOSError,
             OSError,
             RuntimeError,
             ValueError,
@@ -661,7 +661,7 @@ class TaskOrchestrator:
                 can_answer_partially=False,
             )
         except (
-            IraError,
+            BrainOSError,
             RuntimeError,
             ValueError,
             TypeError,
@@ -935,7 +935,7 @@ class TaskOrchestrator:
             except TimeoutError:
                 result = f"(Agent '{phase.agent}' timed out after {_PHASE_TIMEOUT}s)"
                 logger.warning("Phase %d: agent '%s' timed out", phase_id, phase.agent)
-            except (IraError, OSError, RuntimeError, ValueError, TypeError) as exc:
+            except (BrainOSError, OSError, RuntimeError, ValueError, TypeError) as exc:
                 result = f"(Agent '{phase.agent}' error: {exc})"
                 logger.exception("Phase %d: agent '%s' failed", phase_id, phase.agent)
 
@@ -978,7 +978,7 @@ class TaskOrchestrator:
                     ),
                     timeout=_PHASE_TIMEOUT,
                 )
-            except (TimeoutError, IraError, OSError, RuntimeError, ValueError, TypeError):
+            except (TimeoutError, BrainOSError, OSError, RuntimeError, ValueError, TypeError):
                 logger.exception("Calliope report formatting failed — using raw results")
                 markdown_report = f"# Report: {goal}\n\n{compiled}"
         else:
@@ -997,7 +997,7 @@ class TaskOrchestrator:
                 pdf_path = _REPORTS_DIR / f"{task_id}.pdf"
                 pdf_path.write_bytes(pdf_bytes)
                 file_path = str(pdf_path)
-            except (TimeoutError, OSError, ValueError, TypeError, IraError):
+            except (TimeoutError, OSError, ValueError, TypeError, BrainOSError):
                 logger.exception("PDF generation failed — falling back to markdown")
 
         await self._emit(

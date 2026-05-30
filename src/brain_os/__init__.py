@@ -1,4 +1,4 @@
-"""Ira — Brain OS Pantheon."""
+"""Brain OS — Brain OS Pantheon."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Google Cloud DLP (Sensitive Data Protection) integration for Ira.
+"""Google Cloud DLP (Sensitive Data Protection) integration for Brain OS.
 
 Provides :class:`DlpService`, an async wrapper around the DLP REST API
 for detecting and redacting PII/NDA-sensitive content.

@@ -207,7 +207,7 @@ def crm_segment_classify(
     ),
     json_output: bool = typer.Option(False, "--json", help="JSON summary to stdout."),
 ) -> None:
-    """Classify contacts into five Ira relationship segments (imports + Atlas + mail)."""
+    """Classify contacts into five Brain OS relationship segments (imports + Atlas + mail)."""
 
     async def _classify() -> dict[str, Any]:
         from brain_os.data.crm import CRMDatabase
@@ -272,18 +272,18 @@ def crm_twenty_sync_segments(
     limit: int = typer.Option(500, "--limit", help="Max contacts to scan."),
     json_output: bool = typer.Option(False, "--json", help="JSON stats."),
 ) -> None:
-    """Push ira_segment labels from Postgres to Twenty People (jobTitle prefix)."""
+    """Push operator_segment labels from Postgres to Twenty People (jobTitle prefix)."""
 
     async def _sync() -> dict[str, Any]:
         from brain_os.data.twenty_settings import get_twenty_config
         from brain_os.systems.twenty_client import TwentyGraphQLClient
-        from brain_os.systems.twenty_segment_sync import sync_ira_segments_to_twenty
+        from brain_os.systems.twenty_segment_sync import sync_operator_segments_to_twenty
 
         cfg = get_twenty_config()
         if not (cfg.api_url or "").strip() or not cfg.api_key.get_secret_value().strip():
             return {"error": "Twenty not configured (TWENTY_API_URL / TWENTY_API_KEY)."}
         client = TwentyGraphQLClient.from_config(cfg)
-        return await sync_ira_segments_to_twenty(client, dry_run=dry_run, limit=limit)
+        return await sync_operator_segments_to_twenty(client, dry_run=dry_run, limit=limit)
 
     result = _run(_sync())
     if json_output:

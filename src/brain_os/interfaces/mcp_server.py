@@ -1,6 +1,6 @@
-"""MCP (Model Context Protocol) server for Ira.
+"""MCP (Model Context Protocol) server for Brain OS.
 
-Exposes Ira's core capabilities as MCP tools, making them accessible
+Exposes Brain OS's core capabilities as MCP tools, making them accessible
 to Claude, Cursor, and any MCP-compatible client.  Uses the same
 bootstrap logic as the CLI to avoid service duplication.
 
@@ -120,7 +120,7 @@ _is_transient_agent_loop_error = _mcp_rt._is_transient_agent_loop_error
 _loop_telemetry = _mcp_rt._loop_telemetry
 _normalize_validator_mode = _mcp_rt._normalize_validator_mode
 _utc_now_iso = _mcp_rt._utc_now_iso
-# 2.16 — query_ira moved; last inline users for pipeline + discovery helpers
+# 2.16 — query_brain moved; last inline users for pipeline + discovery helpers
 _pipeline = _mcp_rt._pipeline
 _is_short_factual_query = _mcp_rt._is_short_factual_query
 _quick_answer_core = _mcp_rt._quick_answer_core
@@ -224,7 +224,7 @@ git_ship_status = _mcp_delegate_tools.git_ship_status
 persuasion_sprint = _mcp_revenue_tools.persuasion_sprint
 get_account_brief = _mcp_brief_tools.get_account_brief
 prepare_formal_quote = _mcp_quotes_tools.prepare_formal_quote
-query_ira = _mcp_query_tools.query_ira
+query_brain = _mcp_query_tools.query_brain
 discover_tools_for_query = _mcp_query_tools.discover_tools_for_query
 search_knowledge = _mcp_query_tools.search_knowledge
 quick_answer = _mcp_query_tools.quick_answer

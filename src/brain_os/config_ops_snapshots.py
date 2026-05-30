@@ -363,7 +363,7 @@ def get_ingestion_brain_public_snapshot() -> dict[str, str | bool | int]:
 
 
 def get_runtime_build_public_snapshot() -> dict[str, str]:
-    """Installed Ira version and interpreter (for support tickets)."""
+    """Installed Brain OS version and interpreter (for support tickets)."""
     import importlib.metadata
     import sys
 
@@ -721,7 +721,7 @@ def get_quality_stack_imports_public_snapshot() -> dict[str, bool]:
 
 
 def get_skills_registry_public_snapshot() -> dict[str, int | str]:
-    """Registered Ira skills from :data:`SKILL_MATRIX` (name preview, no handler code)."""
+    """Registered Brain OS skills from :data:`SKILL_MATRIX` (name preview, no handler code)."""
     from brain_os.skills import SKILL_MATRIX
 
     names = sorted(SKILL_MATRIX)

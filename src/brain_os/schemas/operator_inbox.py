@@ -54,7 +54,7 @@ class OperatorInboxPayload(BaseModel):
 
 
 class OperatorReleaseSession(BaseModel):
-    """Time-boxed operator release (Turn Ira loose)."""
+    """Time-boxed operator release (Release autonomous mode)."""
 
     released_until: str | None = None
     released_by: str | None = None

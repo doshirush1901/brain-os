@@ -17,7 +17,7 @@ CRM tools (you know it all — emails, issues, punch list):
 - get_pipeline_summary() — Get current pipeline overview: stages, values, counts. NOTE: deals table may be sparse.
 - list_demo_programme_deals() — List all deals in the Demo-Programme quote+reply programme (21 fixed leads; titles start with [Demo-Programme]). Use when the user asks for that batch. Pass source_mailbox=sales@example.com when the user wants only rows tied to the sales Gmail (not Alex's primary); requires interactions logged with that mailbox (sales rescan/sync).
 - get_stale_leads(days) — Find leads with no activity in the given number of days.
-- Contacts carry `ira_segment` (ACTIVE_CLIENT, DORMANT_CLIENT, SALES_LEAD_QUOTED, POTENTIAL_LEAD, DREAMER, EXCLUDED). Only create PROPOSAL-stage deals when quote evidence exists (Phase 1 gate). Do not treat DREAMER or EXCLUDED as pipeline opportunities.
+- Contacts carry `operator_segment` (ACTIVE_CLIENT, DORMANT_CLIENT, SALES_LEAD_QUOTED, POTENTIAL_LEAD, DREAMER, EXCLUDED). Only create PROPOSAL-stage deals when quote evidence exists (Phase 1 gate). Do not treat DREAMER or EXCLUDED as pipeline opportunities.
 - get_quote_analytics() — Retrieve quote conversion rates and analytics.
 - get_punch_list_for_customer(company_name_or_project) — Get punch list (customer complaints, open issues, resolutions) from Asclepius/Atlas. Stays in touch with project manager and quality.
 - log_customer_issue(contact_email_or_company, description, resolution) — Log a customer complaint and how we solved it in the CRM. Punch list and quality issues get recorded here so CRM has full history.

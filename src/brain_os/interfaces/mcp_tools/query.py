@@ -2,7 +2,7 @@
 
 Four retrieval / pipeline-driven query tools:
 
-- ``query_ira``                — full 17-step pipeline (Perceive → Remember →
+- ``query_brain``                — full 17-step pipeline (Perceive → Remember →
   Route → Enrich → Execute → Compliance → DLP → Corrections → Gaps →
   Faithfulness → Assess → Reflect → Shape → Learn → Return). Highest-traffic
   MCP tool. Supports progressive tool discovery + fastlane.
@@ -10,7 +10,7 @@ Four retrieval / pipeline-driven query tools:
 - ``search_knowledge``         — direct retriever search (no synthesis)
 - ``quick_answer``             — retrieval-only fastlane response
 
-All four front ``srv.*`` lazy-facade attributes on ``mcp_server``. ``query_ira``
+All four front ``srv.*`` lazy-facade attributes on ``mcp_server``. ``query_brain``
 additionally reads ``is_low_confidence_response`` from ``brain_os.brain.tool_discovery``
 at module top — preserved as a top-level import (called inside the
 low-confidence retry branch only).
@@ -30,13 +30,13 @@ from brain_os.interfaces.mcp_tool_hardening import hardened_mcp_tool
 logger = logging.getLogger(__name__)
 
 
-async def query_ira(question: str, user_id: str | None = None) -> str:
-    """Ask Ira a question about Acme Corp.
+async def query_brain(question: str, user_id: str | None = None) -> str:
+    """Ask Brain OS a question about Acme Corp.
 
     Routes through the full 17-step pipeline (see AGENTS.md): perceive,
     remember, route, enrich, execute, compliance, DLP, corrections, gaps,
     faithfulness, assess, reflect, shape, learn, and return.
-    Ira will delegate to the appropriate specialist agents automatically.
+    Brain OS will delegate to the appropriate specialist agents automatically.
 
     ``user_id`` scopes conversation history and Mem0 (same as API ``user_id``).
     When omitted or blank, uses ``APP__DEFAULT_USER_ID`` from the host ``.env``
@@ -47,7 +47,7 @@ async def query_ira(question: str, user_id: str | None = None) -> str:
 
     await srv._ensure_initialized()
     if srv._pipeline is None:
-        return "Ira pipeline not available."
+        return "Brain OS pipeline not available."
 
     try:
         from brain_os.config import get_settings
@@ -151,7 +151,7 @@ async def query_ira(question: str, user_id: str | None = None) -> str:
             )
         return response + suffix
     except Exception as exc:
-        logger.exception("MCP query_ira failed")
+        logger.exception("MCP query_brain failed")
         return f"Error: {exc}"
 
 
@@ -159,7 +159,7 @@ async def discover_tools_for_query(query: str, top_k: int = 8) -> str:
     """Return a ranked MCP tool shortlist for a query (progressive discovery helper).
 
     Useful for clients that want to preflight tool selection before issuing
-    a full `query_ira` request.
+    a full `query_brain` request.
     """
     from brain_os.interfaces import mcp_server as srv
 
@@ -188,7 +188,7 @@ async def discover_tools_for_query(query: str, top_k: int = 8) -> str:
 
 
 async def search_knowledge(query: str, limit: int = 10) -> str:
-    """Search Ira's knowledge base across Qdrant, Neo4j, and Mem0.
+    """Search Brain OS's knowledge base across Qdrant, Neo4j, and Mem0.
 
     Returns the top results with content, scores, and source metadata.
     Use this for direct knowledge retrieval without agent reasoning.
@@ -238,7 +238,7 @@ async def quick_answer(
 
 def register(mcp: FastMCP) -> None:
     """Register query tools on the given FastMCP instance."""
-    mcp.tool()(hardened_mcp_tool(query_ira))
+    mcp.tool()(hardened_mcp_tool(query_brain))
     mcp.tool()(hardened_mcp_tool(discover_tools_for_query))
     mcp.tool()(hardened_mcp_tool(search_knowledge))
     mcp.tool()(hardened_mcp_tool(quick_answer))

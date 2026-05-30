@@ -1,6 +1,6 @@
 """Respiratory system — operational rhythm and cadence.
 
-Manages Ira's heartbeat (periodic health logging), inhale cycle (morning
+Manages Brain OS's heartbeat (periodic health logging), inhale cycle (morning
 data ingestion), exhale cycle (nightly consolidation and reporting), and
 per-request breath timing.
 """
@@ -42,7 +42,7 @@ _BREATH_THRESHOLD_MS = 30_000
 
 
 class RespiratorySystem:
-    """Manages Ira's operational rhythm via heartbeat, inhale/exhale cycles."""
+    """Manages Brain OS's operational rhythm via heartbeat, inhale/exhale cycles."""
 
     def __init__(
         self,
@@ -223,9 +223,9 @@ class RespiratorySystem:
             logger.debug("EXHALE skipping goal sweep (GoalManager not configured)")
 
         summary = (
-            "Ira Daily Exhale Report\n" + "\n".join(summary_parts)
+            "Brain OS Daily Exhale Report\n" + "\n".join(summary_parts)
             if summary_parts
-            else "Ira Daily Exhale: no active subsystems"
+            else "Brain OS Daily Exhale: no active subsystems"
         )
         logger.info(summary)
 

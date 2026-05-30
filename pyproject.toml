@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "brain-os"
 version = "0.1.0"
-description = "Forkable local-first multi-agent Brain OS (extracted from Ira v3)"
+description = "Forkable local-first multi-agent Brain OS"
 authors = ["Brain OS Maintainers <maintainers@example.com>"]
 license = "BSL-1.1"
 readme = "README.md"

@@ -1,6 +1,6 @@
 """Voice system — response shaping by channel, recipient, and behavioral state.
 
-The last step in Ira's response pipeline.  After an agent generates a raw
+The last step in Brain OS's response pipeline.  After an agent generates a raw
 response, the VoiceSystem shapes it for the target channel and recipient —
 adjusting formatting, tone, length, and style.
 """
@@ -126,7 +126,7 @@ _SHORT_RESPONSE_THRESHOLD = 200
 
 
 class VoiceSystem:
-    """Shapes Ira's responses based on channel, recipient, and behavioral modifiers."""
+    """Shapes Brain OS's responses based on channel, recipient, and behavioral modifiers."""
 
     def __init__(self) -> None:
         self._llm = get_llm_client()
@@ -245,7 +245,7 @@ class VoiceSystem:
                 "avg_response_length": 0,
             }
 
-        # Analyze outbound (Ira's responses)
+        # Analyze outbound (Brain OS's responses)
         outbound = [i for i in interactions if i.get("direction") == "OUTBOUND"]
         inbound = [i for i in interactions if i.get("direction") == "INBOUND"]
 

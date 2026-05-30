@@ -3,7 +3,7 @@
 After each response, the observer fires a lightweight LLM call to extract
 corrections, facts, and preferences from the exchange.  These are persisted
 to ``data/brain/realtime_learnings.jsonl`` and injected into the next turn's
-system prompt so Ira immediately benefits from what it just learned.
+system prompt so Brain OS immediately benefits from what it just learned.
 
 Designed to run fire-and-forget so it never blocks the response path.
 """

@@ -15,7 +15,7 @@ COMMUNITY_MAX_DOCUMENTS = 500
 # Tier A MCP tools (Community). Pro registers additional modules/tools.
 COMMUNITY_MCP_TOOL_NAMES: frozenset[str] = frozenset(
     {
-        "query_ira",
+        "query_brain",
         "discover_tools_for_query",
         "search_knowledge",
         "quick_answer",

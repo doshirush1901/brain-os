@@ -22,7 +22,7 @@ from brain_os.brain.write_contract import (
     record_receipt,
 )
 from brain_os.data.models import Channel, Direction, KnowledgeItem
-from brain_os.exceptions import DatabaseError, IraError, LLMError, ToolExecutionError
+from brain_os.exceptions import DatabaseError, BrainOSError, LLMError, ToolExecutionError
 from brain_os.pipeline_runtime import _extract_teaching_facts
 
 logger = logging.getLogger(__name__)
@@ -434,7 +434,7 @@ async def learn_pipeline_turn(
                     },
                 )
             )
-        except (IraError, Exception):
+        except (BrainOSError, Exception):
             error_count += 1
             logger.exception("MusculoskeletalSystem recording failed")
 
@@ -497,7 +497,7 @@ async def learn_pipeline_turn(
     except TimeoutError:
         error_count += 1
         logger.debug("RealTimeObserver timed out (10s) — skipping")
-    except (IraError, Exception):
+    except (BrainOSError, Exception):
         error_count += 1
         logger.warning("RealTimeObserver not available", exc_info=True)
 
@@ -507,7 +507,7 @@ async def learn_pipeline_turn(
             deps.endocrine.boost("growth_signal", 0.02)
             if route_method == "deterministic":
                 deps.endocrine.boost("confidence", 0.01)
-        except (IraError, Exception):
+        except (BrainOSError, Exception):
             error_count += 1
             logger.warning("Endocrine update failed", exc_info=True)
 

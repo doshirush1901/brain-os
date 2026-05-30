@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Centralised Pydantic settings for Ira.
+"""Centralised Pydantic settings for Brain OS.
 
 Prefer :func:`get_settings` (and nested config objects) for application code so
 defaults, env aliases, and validation stay in one place. Use ``os.environ``
@@ -355,7 +355,7 @@ class VapiConfig(BaseSettings):
     icp_force_scrape: bool = True
     icp_scrape_timeout_s: float = Field(default=25.0, ge=5.0, le=120.0)
     icp_block_min_confidence: float = Field(default=0.7, ge=0.0, le=1.0)
-    #: Use Ira industrial former site research (map/scrape/LLM profile) before dial; else fast Firecrawl snippet + Tinder ICP only.
+    #: Use Brain OS industrial former site research (map/scrape/LLM profile) before dial; else fast Firecrawl snippet + Tinder ICP only.
     icp_use_ira_research: bool = True
 
 
@@ -396,7 +396,7 @@ class SearchConfig(BaseSettings):
 
     tavily_api_key: SecretStr = SecretStr("")
     searchapi_api_key: SecretStr = SecretStr("")
-    #: SearchAPI.io ``engine`` query param when Ira uses SearchAPI (fallback chain or ``searchapi_search``).
+    #: SearchAPI.io ``engine`` query param when Brain OS uses SearchAPI (fallback chain or ``searchapi_search``).
     searchapi_engine: str = "google"
     serper_api_key: SecretStr = SecretStr("")
 
@@ -510,7 +510,7 @@ class SlackConfig(BaseSettings):
     default_channel_id: str = ""
     #: Optional ``#demo-sales-leads`` channel ID for operator lead digests.
     sales_leads_channel_id: str = ""
-    #: Comma-separated channel IDs where ``@Ira`` mentions are answered (``app_mention``).
+    #: Comma-separated channel IDs where ``@Brain OS`` mentions are answered (``app_mention``).
     allowed_channel_ids: str = ""
     http_timeout_s: float = Field(default=15.0, ge=3.0, le=60.0)
     pipeline_timeout_s: float = Field(default=90.0, ge=30.0, le=600.0)
@@ -560,7 +560,7 @@ class HonchoConfig(BaseSettings):
     assistant_peer_id: str = "ira"
     dialectic_query: str = (
         "In 6 bullet points or fewer, summarize this peer's communication style, "
-        "stated goals, constraints, and how Ira should adapt. Be concrete; omit speculation."
+        "stated goals, constraints, and how Brain OS should adapt. Be concrete; omit speculation."
     )
     dialectic_ttl_seconds: float = Field(default=3600.0, ge=60.0, le=604800.0)
     dialectic_reasoning_level: Literal["minimal", "low", "medium", "high", "max"] = "low"
@@ -589,7 +589,7 @@ class AppConfig(BaseSettings):
         validation_alias=AliasChoices("APP__CRM_BACKEND", "CRM_BACKEND"),
     )
     # Total request timeout (seconds). Typical presets: 30s, 2min=120, 5min=300, 10min=600, 20min=1200.
-    # Future: Ira/Athena can choose by request type (e.g. learning model for time-to-complete).
+    # Future: Brain OS/Athena can choose by request type (e.g. learning model for time-to-complete).
     pipeline_timeout: int = 600
     #: Per-stage wall-clock budgets (seconds). ``0`` = no per-stage cap (learn is best-effort).
     #: Override via ``APP__PIPELINE_STAGE_BUDGETS`` JSON object. Global ``pipeline_timeout`` is
@@ -967,7 +967,7 @@ class AppConfig(BaseSettings):
     #: Secret for hashing public scheduling tokens. Falls back to ``APP__API_SECRET_KEY`` when empty.
     scheduling_token_secret: SecretStr = SecretStr("")
     scheduling_default_timezone: str = "Asia/Kolkata"
-    #: Ira v3 in-service date (first foundation commit). Pantheon ``age_in_days`` uses this.
+    #: Brain OS in-service date (first foundation commit). Pantheon ``age_in_days`` uses this.
     ira_birth_date: date = Field(default=date(2026, 3, 6))
     #: Operator IANA timezone for pipeline clock injection (IST by default).
     operator_timezone: str = "Asia/Kolkata"
@@ -976,7 +976,7 @@ class AppConfig(BaseSettings):
     #: Life phase hint: awake | dream | briefing | quiet.
     ira_time_mode: Literal["awake", "dream", "briefing", "quiet"] = "awake"
     #: Tech-industry "internet years" ratio (Vint Cerf, 1999): 1 calendar year at full load
-    #: ≈ this many Ira experience years. Default 7 → ~52.2 calendar days per Ira-year.
+    #: ≈ this many Brain OS experience years. Default 7 → ~52.2 calendar days per Brain OS-year.
     ira_internet_years_ratio: float = Field(default=7.0, ge=1.0, le=52.0)
     #: Weight experiential age by dream/journal/runs/operator signals (else full load).
     ira_experience_activity_weighting: bool = True
@@ -1025,7 +1025,7 @@ class AppConfig(BaseSettings):
     #: Executable basename resolved via PATH (default Anthropic Claude Code CLI).
     claude_code_delegate_command: str = "claude"
     claude_code_delegate_timeout_seconds: int = Field(default=600, ge=30, le=7200)
-    #: Comma-separated absolute paths; empty = Ira repo checkout root only.
+    #: Comma-separated absolute paths; empty = Brain OS repo checkout root only.
     claude_code_delegate_allowed_roots: str = ""
     claude_code_delegate_max_prompt_chars: int = Field(default=48_000, ge=500, le=200_000)
     claude_code_delegate_max_output_chars: int = Field(default=400_000, ge=10_000, le=2_000_000)
@@ -1034,7 +1034,7 @@ class AppConfig(BaseSettings):
     git_ship_enabled: bool = False
     #: Separate gate for ``ira git ship push`` (requires ``git_ship_enabled`` as well).
     git_ship_allow_push: bool = False
-    #: Comma-separated absolute dirs for git ship cwd (empty = Ira repo root only).
+    #: Comma-separated absolute dirs for git ship cwd (empty = Brain OS repo root only).
     git_ship_allowed_roots: str = ""
     git_ship_timeout_seconds: int = Field(default=120, ge=10, le=900)
     git_ship_max_commit_message_chars: int = Field(default=8000, ge=20, le=50_000)
@@ -1045,7 +1045,7 @@ class AppConfig(BaseSettings):
     #: Comma-separated event names to send (empty = all implemented: dream, delegate, git_ship).
     operator_webhook_events: str = ""
 
-    #: Ira Agency — proactive operator suggestion deck (Sprint 1).
+    #: Brain OS Agency — proactive operator suggestion deck (Sprint 1).
     agency_enabled: bool = True
     agency_max_daily_cards: int = Field(default=8, ge=1, le=50)
     agency_goals_path: str = ""
@@ -1132,12 +1132,12 @@ class AppConfig(BaseSettings):
     outbound_dreamer_min_outbound: int = Field(default=5, ge=3, le=20)
     #: Max proactive touches per domain per 90 days (uses stored outbound_touch_count).
     outbound_max_touches_per_domain_90d: int = Field(default=3, ge=1, le=20)
-    #: Write Ira segment into Twenty Person jobTitle prefix (until custom field wired).
+    #: Write Brain OS segment into Twenty Person jobTitle prefix (until custom field wired).
     twenty_sync_segment_in_job_title: bool = True
 
     #: When True, heartbeat pipeline ``query`` jobs skip until operator release session is active.
     operator_release_required: bool = False
-    #: Default TTL for ``POST /api/operator/release`` (Turn Ira loose).
+    #: Default TTL for ``POST /api/operator/release`` (Release autonomous mode).
     operator_release_ttl_hours: float = Field(default=4.0, ge=0.25, le=168.0)
 
     #: Hermes-style loop: promote compiler candidates into ``ProceduralMemory`` when thresholds match.

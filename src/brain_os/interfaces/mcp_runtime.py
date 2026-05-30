@@ -33,8 +33,8 @@ logger = logging.getLogger(__name__)
 mcp = FastMCP(
     "ira",
     instructions=(
-        "Ira is Acme's multi-agent assistant for industrial forming machinery sales & operations "
-        "(industrial OEM). Tools query Ira's pipeline, knowledge base, CRM, Gmail (when configured), "
+        "Brain OS is Acme's multi-agent assistant for industrial forming machinery sales & operations "
+        "(industrial OEM). Tools query Brain OS's pipeline, knowledge base, CRM, Gmail (when configured), "
         "memory, graph, web search, and specialist agents. "
         "**Never expose this MCP server to untrusted networks** — Gmail/CRM/memory-write tools can leak or mutate data."
     ),
@@ -74,7 +74,7 @@ _MCP_DOCAI_MAX_BYTES = 40 * 1024 * 1024
 
 
 def _mcp_query_sender_id(user_id: str | None) -> str:
-    """Resolve pipeline ``sender_id`` for MCP ``query_ira``."""
+    """Resolve pipeline ``sender_id`` for MCP ``query_brain``."""
     raw = (user_id or "").strip()
     if raw:
         return raw
@@ -171,7 +171,7 @@ async def _quick_answer_core(
         hits = await retriever.search(question, limit=limit)
         if not hits:
             return (
-                "No strong knowledge hits found for this question. Try `query_ira` for a full synthesis.",
+                "No strong knowledge hits found for this question. Try `query_brain` for a full synthesis.",
                 False,
                 {"reason": "no_hits", "hits": 0},
             )
@@ -198,7 +198,7 @@ async def _quick_answer_core(
             score = float(hit.get("score", 0) or 0)
             lines.append(f"{idx}. {content} [source={source}, score={score:.3f}]")
         if not confident:
-            lines.append("Use `query_ira` if you need a fully verified, synthesized response.")
+            lines.append("Use `query_brain` if you need a fully verified, synthesized response.")
         return (
             "\n".join(lines),
             confident,
@@ -280,7 +280,7 @@ def _sync_mcp_server_facade() -> None:
 
 
 async def _ensure_initialized() -> None:
-    """Lazy-init the Ira subsystems on first tool call."""
+    """Lazy-init the Brain OS subsystems on first tool call."""
     global _pantheon, _shared_services, _pipeline, _retriever, _crm, _ingestor
     global _long_term_memory, _conversation_memory, _relationship_memory
     global _goal_manager, _knowledge_graph, _email_processor, _tinder_email_mode
@@ -379,7 +379,7 @@ async def _ensure_initialized() -> None:
         _initialized = True
         _sync_mcp_server_facade()
         logger.info(
-            "Ira MCP server initialized (%d tools registered)", len(mcp._tool_manager._tools)
+            "Brain OS MCP server initialized (%d tools registered)", len(mcp._tool_manager._tools)
         )
 
 

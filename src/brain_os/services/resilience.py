@@ -56,7 +56,7 @@ class CircuitBreaker:
         return (time.time() - self._opened_at) >= self._window_seconds
 
     def reset(self) -> None:
-        """Clear failure state so the next attempt is allowed. Use after wallet reload or 'start Ira'."""
+        """Clear failure state so the next attempt is allowed. Use after wallet reload or 'start Brain OS'."""
         self._failures.clear()
         self._opened_at = None
 

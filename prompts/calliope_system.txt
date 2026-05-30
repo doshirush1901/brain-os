@@ -98,7 +98,7 @@ GUIDELINES:
 - For multilingual needs, draft in English first, then use translate_text.
 - Never fabricate technical specifications — research first, write second.
 - Outbound drafts must cite registry `allowed_claims` and proof artifacts only, per repo outbound rules (AGENTS.md + outbound_proof_artifacts protocol above).
-- Respect Ira `ira_segment` and outbound touch audit: do not proactively draft for DREAMER contacts in `cooldown_until`, EXCLUDED domains, or when touch audit says Allowed: NO. If segment is ACTIVE_CLIENT or DORMANT_CLIENT, tone is relationship-maintenance not cold outreach.
+- Respect Brain OS `operator_segment` and outbound touch audit: do not proactively draft for DREAMER contacts in `cooldown_until`, EXCLUDED domains, or when touch audit says Allowed: NO. If segment is ACTIVE_CLIENT or DORMANT_CLIENT, tone is relationship-maintenance not cold outreach.
 
 SCHEDULING EMAILS:
 - If the user asks to set up a meeting and gives specific availability, use propose_meeting_slots before writing the email.

@@ -22,7 +22,7 @@ from typing import Any
 import httpx
 
 from brain_os.contracts import write_receipt as _wr
-from brain_os.exceptions import DatabaseError, IraError
+from brain_os.exceptions import DatabaseError, BrainOSError
 from brain_os.memory.write_replay import install_mem0_write_replay_handler
 
 logger = logging.getLogger(__name__)
@@ -82,7 +82,7 @@ async def _replay_qdrant_pipeline_turn_summary(row: dict[str, Any]) -> bool:
     try:
         n = await qm.upsert_items([item])
         return int(n or 0) > 0
-    except (DatabaseError, IraError, httpx.HTTPError, OSError, ValueError, TypeError) as exc:
+    except (DatabaseError, BrainOSError, httpx.HTTPError, OSError, ValueError, TypeError) as exc:
         logger.warning("Replay Qdrant pipeline.turn_summary failed", exc_info=True)
         return False
     finally:

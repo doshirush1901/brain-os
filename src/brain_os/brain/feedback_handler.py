@@ -1,4 +1,4 @@
-"""Real-time feedback processing for all Ira interfaces.
+"""Real-time feedback processing for all Brain OS interfaces.
 
 Detects positive, negative, and ambiguous feedback in user messages,
 tracks per-agent success/failure scores, stores corrections in the
@@ -19,7 +19,7 @@ import httpx
 from langfuse.decorators import observe
 
 from brain_os.brain.untrusted_input import sanitize_for_llm_embedding
-from brain_os.exceptions import DatabaseError, IraError, LLMError
+from brain_os.exceptions import DatabaseError, BrainOSError, LLMError
 from brain_os.schemas.llm_outputs import FeedbackClassification
 from brain_os.services.llm_client import get_llm_client
 
@@ -166,7 +166,7 @@ class FeedbackHandler:
                     await self._power_level_tracker.record_trust_decrease(
                         agents_used[i], agents_used[i + 1]
                     )
-            except (TimeoutError, DatabaseError, IraError, httpx.HTTPError) as exc:
+            except (TimeoutError, DatabaseError, BrainOSError, httpx.HTTPError) as exc:
                 logger.debug("Trust decrease recording failed", exc_info=True)
 
         if polarity == "negative" and result.get("extracted_correction"):
@@ -208,7 +208,7 @@ class FeedbackHandler:
                             )
                         except (
                             TimeoutError,
-                            IraError,
+                            BrainOSError,
                             OSError,
                             TypeError,
                             ValueError,
@@ -350,7 +350,7 @@ class FeedbackHandler:
                 except (
                     TimeoutError,
                     DatabaseError,
-                    IraError,
+                    BrainOSError,
                     OSError,
                     httpx.HTTPError,
                     ValueError,
@@ -513,7 +513,7 @@ class FeedbackHandler:
                 TimeoutError,
                 OSError,
                 DatabaseError,
-                IraError,
+                BrainOSError,
                 ValueError,
                 TypeError,
                 AttributeError,
@@ -534,7 +534,7 @@ class FeedbackHandler:
             TimeoutError,
             OSError,
             DatabaseError,
-            IraError,
+            BrainOSError,
             httpx.HTTPError,
             ValueError,
             TypeError,
