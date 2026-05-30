@@ -1100,7 +1100,7 @@ class DreamMode:
         await self._brain_hooks.stage12f_skill_candidates(self._stage_context(), stage_log)
 
     async def _stage12b_curator_lite(self, stage_log: dict[str, Any]) -> None:
-        """Hermes-style SKILL/prompt hygiene report (no LLM). Opt-in via IRA_DREAM_CURATOR."""
+        """Hermes-style SKILL/prompt hygiene report (no LLM). Opt-in via BRAIN_DREAM_CURATOR."""
         if self._brain_hooks is None:
             stage_log["stages"]["12b_curator_lite"] = {
                 "status": "skipped",

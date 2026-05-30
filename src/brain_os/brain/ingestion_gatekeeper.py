@@ -12,7 +12,7 @@ since all work is I/O-bound (API calls to OpenAI / Qdrant / Neo4j).
   Concurrency 5 (default):  ~9s/file   — 712 files = ~1.8 hours
   Concurrency 10:           ~5s/file   — 712 files = ~1 hour
 
-Can be called from the CLI (``ira ingest``), the respiratory system's
+Can be called from the CLI (``brain ingest``), the respiratory system's
 inhale cycle, or directly by the Alexandros agent.
 """
 

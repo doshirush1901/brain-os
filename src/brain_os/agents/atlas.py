@@ -563,7 +563,7 @@ class Atlas(BaseAgent):
                 "Split answer into: (1) installation-mode recently shipped, "
                 "(2) current in-plant projects. "
                 "Trust the CANONICAL ORDER BOOK block over KB when they conflict. "
-                "Never list Faure France as active production. "
+                "Never list StaleCorp Demo as active production. "
                 "Label older KB dates as historical, not active production."
             )
             return await self.call_llm(system, user_msg, temperature=0.2)

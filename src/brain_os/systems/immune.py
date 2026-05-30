@@ -374,7 +374,7 @@ class ImmuneSystem:
         """Log an alert at the appropriate severity level."""
         logger.log(
             logging.CRITICAL if severity.upper() == "critical" else logging.WARNING,
-            "[IRA %s] %s",
+            "[BRAIN %s] %s",
             severity.upper(),
             message,
         )

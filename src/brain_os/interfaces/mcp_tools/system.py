@@ -46,7 +46,7 @@ async def get_system_status() -> str:
     16. ``vendor_apis`` — optional search, enrichment, NewsData, OCR-related API key presence, Document AI project flag, and ``iris_web_search_configured`` (any of Tavily/Serper/SearchAPI).
     17. ``http_api`` — whether ``API_SECRET_KEY`` is set and a short CORS origins preview (no secret values).
     18. ``ingestion_brain`` — presence/size of ``brain/imports_metadata.json``, ``ingestion_log.json``, Graphe DB under ``BRAIN_DATA_DIR``, plus ingest flags (PII redaction, Mnemon semantic check).
-    19. ``runtime_build`` — installed ``ira`` package version, Python version, and OS platform.
+    19. ``runtime_build`` — installed ``brain`` package version, Python version, and OS platform.
     20. ``secondary_mailbox`` — optional second Gmail OAuth paths configured and files present.
     21. ``governance_brain`` — correction ledger/DB and related files under ``brain/``, plus ``legacy_quarantine_strict``.
     22. ``storage_clients`` — Qdrant timeout, API-key presence (primary + cloud), Neo4j driver pool size.
@@ -61,7 +61,7 @@ async def get_system_status() -> str:
     31. ``repo_truth_hints`` — repo ``data/brain/truth_hints.json`` and ``learned_truth_hints.json`` presence/size.
     32. ``runtime_capabilities`` — import probes for ``filelock``, ``apscheduler``, ``httpx``, ``fastapi``, ``typer``, ``qdrant_client``, ``neo4j``, ``sqlalchemy`` in this interpreter.
     33. ``repo_framework`` — presence of repo-root framework files: ``web-ui/package.json``, ``docker-compose.local.yml``, ``.env.example``, ``alembic.ini``, ``pyproject.toml`` (truncated root label, no secrets).
-    34. ``repo_sources`` — ``src/ira`` package, ``prompts/`` (``.txt`` count), ``tests/``, ``alembic/``, ``scripts/`` directory flags.
+    34. ``repo_sources`` — ``src/brain_os`` package, ``prompts/`` (``.txt`` count), ``tests/``, ``alembic/``, ``scripts/`` directory flags.
     35. ``app_runtime_imports`` — import probes for LLM/server stack: ``openai``, ``anthropic``, ``langfuse``, ``redis``, ``uvicorn``, ``voyageai``, ``mem0``, ``mcp``, ``tiktoken``, ``jinja2``, ``pydantic_settings``.
     36. ``optional_tooling_imports`` — heavier optional imports: ``sentry_sdk``, ``alembic``, ``asyncpg``, ``aiosqlite``, ``google.auth``, ``googleapiclient``, ``sse_starlette``, ``crawl4ai``, ``docling``, ``neo4j_graphrag``, ``gliner``, ``instructor``, ``chonkie``, ``pypdf``.
     37. ``repo_vcs`` — git present at repo root, current branch label (abbrev), working tree clean vs dirty (no hashes or paths).

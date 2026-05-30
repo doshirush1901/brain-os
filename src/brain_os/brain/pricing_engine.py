@@ -2,7 +2,7 @@
 
 Provides price estimation from historical quotes, aggregate pipeline
 analytics, and formal quote-content generation.  All knowledge retrieval
-goes through :class:`~ira.brain.retriever.UnifiedRetriever`; CRM data is
+goes through :class:`~brain_os.brain.retriever.UnifiedRetriever`; CRM data is
 accessed via a thin repository interface defined here (implemented in
 Phase 4).
 """

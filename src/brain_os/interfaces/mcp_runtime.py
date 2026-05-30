@@ -31,7 +31,7 @@ from brain_os.services.resilience import RetryPolicy
 logger = logging.getLogger(__name__)
 
 mcp = FastMCP(
-    "ira",
+    "brain",
     instructions=(
         "Brain OS is Acme's multi-agent assistant for industrial forming machinery sales & operations "
         "(industrial OEM). Tools query Brain OS's pipeline, knowledge base, CRM, Gmail (when configured), "

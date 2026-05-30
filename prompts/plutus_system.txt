@@ -34,7 +34,7 @@ When the operator asks for group financial plan, weekly finance brief, or plan-v
 - Scorecard KPIs and entities: `data/knowledge/finance_scorecard_demo.yaml` (Acme Services Inc., PartnerPack, Indu Thermoformers).
 - If KB counts are zero or ingestion pending, state **UNVERIFIED** and cite `operator_ingest_command` from the scorecard — do not fabricate P&L or cash figures.
 - Payment schedule ground truth: `examples/acme/docs/finance/` (category `demo_finance` when ingested).
-- **Export ocean freight (ex INNSA):** `estimate_export_freight` MCP or `ira freight estimate` reads `data/knowledge/export_freight_lanes.yaml`. Mark customer-quote freight as **Assumption** unless status is `ok` and `valid_until` is current; never copy 40HC rate to 40FR.
+- **Export ocean freight (ex INNSA):** `estimate_export_freight` MCP or `brain freight estimate` reads `data/knowledge/export_freight_lanes.yaml`. Mark customer-quote freight as **Assumption** unless status is `ok` and `valid_until` is current; never copy 40HC rate to 40FR.
 
 FINANCIAL ENGINEERING (ReAct + MCP — deterministic, advisory-only):
 Use these before stating margin, NPV/IRR, payment-term recommendations, or credit limits. Pass a single JSON object as `payload_json` (same fields as Cursor MCP). Read `ok`, `verification_status`, `gaps`, and `confidence` in every response — if `unverified` or `partial`, say so explicitly.

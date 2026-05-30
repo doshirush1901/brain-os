@@ -78,13 +78,13 @@ _TINDER_EXTRA_LEGS: tuple[LegSpec, ...] = (
     LegSpec(
         "outbound_cadence",
         "Outbound cadence",
-        "ira email touch-audit",
+        "brain email touch-audit",
         "tinder",
     ),
     LegSpec(
         "icp_buyer_fit",
         "ICP (industrial former buyer)",
-        "ira tinder card — site + classifier",
+        "brain tinder card — site + classifier",
         "tinder",
     ),
 )
@@ -212,7 +212,7 @@ def format_gaps_only_block(
             "Triangulation (SOUL / Anekantavada) — gaps only\n"
             f"Company: {company} | Mode: {mode}\n"
             "| Leg | Status | Next step |\n"
-            "| UNVERIFIED | brief timeout or error | retry ira brief |"
+            "| UNVERIFIED | brief timeout or error | retry brain brief |"
         )
 
     rows = leg_status_rows(brief, hex=mode == "hex")

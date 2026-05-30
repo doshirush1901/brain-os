@@ -343,7 +343,7 @@ _PATTERNS: list[_Pattern] = _compile(
         (r"\bformal\s+quote\b", IntentCategory.QUOTE_GENERATION, 3.0),
         (r"\bquote\s+document\b", IntentCategory.QUOTE_GENERATION, 2.5),
         # Contact / inbox classification (sentinel for offline gold eval; must beat MACHINE_SPECS on long threads)
-        (r"\[IRA_EMAIL_GOLD_EVAL_v1\]", IntentCategory.CONTACT_CLASSIFICATION, 100.0),
+        (r"\[BRAIN_EMAIL_GOLD_EVAL_v1\]", IntentCategory.CONTACT_CLASSIFICATION, 100.0),
         # Contact classification
         (r"\bclassif", IntentCategory.CONTACT_CLASSIFICATION, 2.0),
         (r"\bwho\s+is\b.*\bcontact\b", IntentCategory.CONTACT_CLASSIFICATION, 2.5),

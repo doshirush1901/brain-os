@@ -2,9 +2,9 @@
 
 Every specialist agent inherits from :class:`BaseAgent`, which provides
 LLM access (OpenAI, Anthropic, optional Ollama) via the centralised
-:class:`~ira.services.llm_client.LLMClient`, knowledge-base search via
-the :class:`~ira.brain.retriever.UnifiedRetriever`, a reference to the
-:class:`~ira.message_bus.MessageBus` for inter-agent communication,
+:class:`~brain_os.services.llm_client.LLMClient`, knowledge-base search via
+the :class:`~brain_os.brain.retriever.UnifiedRetriever`, a reference to the
+:class:`~brain_os.message_bus.MessageBus` for inter-agent communication,
 and an opt-in ReAct (Reason-Act-Observe) loop for agentic tool use.
 """
 
@@ -103,7 +103,7 @@ def _delegation_observation_meta(
     safe_inputs: dict[str, Any],
     delegation_ms: int | None,
 ) -> dict[str, Any]:
-    """Extra IRA_TOOL_META fields for delegation tools."""
+    """Extra BRAIN_TOOL_META fields for delegation tools."""
     if tool_name not in _DELEGATION_TOOL_NAMES:
         return {}
     to_a = str(safe_inputs.get("agent_name") or "").lower().strip()
@@ -170,7 +170,7 @@ class BaseAgent(ABC):
     role: str = ""
     description: str = ""
     model_provider: str = (
-        "openai"  # "openai" or "anthropic" (ignored when IRA_DEFAULT_LLM_PROVIDER=ollama)
+        "openai"  # "openai" or "anthropic" (ignored when BRAIN_DEFAULT_LLM_PROVIDER=ollama)
     )
     #: When set, ``_reason`` / ``call_llm`` pass this ``model_profile`` (e.g. ``\"writing\"`` for Calliope).
     preferred_model_profile: str | None = None
@@ -187,7 +187,7 @@ class BaseAgent(ABC):
     def _primary_llm_provider(self) -> str:
         """ReAct / ``call_llm`` primary provider before cloud fallback.
 
-        When :envvar:`IRA_DEFAULT_LLM_PROVIDER` is ``ollama`` and ``OLLAMA_BASE_URL`` is set,
+        When :envvar:`BRAIN_DEFAULT_LLM_PROVIDER` is ``ollama`` and ``OLLAMA_BASE_URL`` is set,
         all agents use local Ollama first regardless of per-agent ``model_provider``.
         """
         ctx = getattr(self, "_context", None)
@@ -1441,7 +1441,7 @@ class BaseAgent(ABC):
         for k, v in meta.items():
             if v is not None:
                 payload[k] = v
-        return "IRA_TOOL_META:" + json.dumps(payload, default=str) + "\n" + body
+        return "BRAIN_TOOL_META:" + json.dumps(payload, default=str) + "\n" + body
 
     async def _execute_tool(self, name: str, inputs: dict[str, Any]) -> str:
         """Find and execute a registered tool by name.
@@ -1451,7 +1451,7 @@ class BaseAgent(ABC):
         with ``got an unexpected keyword argument``.
 
         Successful and failed executions prefix the observation with a single
-        ``IRA_TOOL_META:{...}`` JSON line (machine-readable audit) before the
+        ``BRAIN_TOOL_META:{...}`` JSON line (machine-readable audit) before the
         human-readable tool body.
         """
 

@@ -184,10 +184,10 @@ class LLMClient:
         self._openai_model = cfg.llm.openai_model
         self._anthropic_model = cfg.llm.anthropic_model
         _am = cfg.llm.anthropic_model
-        _af = (cfg.llm.ira_anthropic_model_fast or "").strip() or _am
-        _ar = (cfg.llm.ira_anthropic_model_reasoning or "").strip() or _am
-        _aw = (cfg.llm.ira_anthropic_model_writing or "").strip() or _am
-        _av = (cfg.llm.ira_anthropic_model_verifier or "").strip() or _am
+        _af = (cfg.llm.brain_anthropic_model_fast or "").strip() or _am
+        _ar = (cfg.llm.brain_anthropic_model_reasoning or "").strip() or _am
+        _aw = (cfg.llm.brain_anthropic_model_writing or "").strip() or _am
+        _av = (cfg.llm.brain_anthropic_model_verifier or "").strip() or _am
         self._anthropic_model_profiles = {
             "default": _am,
             "fast": _af,
@@ -204,17 +204,17 @@ class LLMClient:
         }
         self._model_profiles = {
             "default": cfg.llm.openai_model,
-            "fast": cfg.llm.ira_model_fast,
-            "extract": cfg.llm.ira_model_fast,
-            "extraction": cfg.llm.ira_model_fast,
-            "classification": cfg.llm.ira_model_fast,
-            "reasoning": cfg.llm.ira_model_reasoning,
-            "synthesis": cfg.llm.ira_model_reasoning,
-            "writing": cfg.llm.ira_model_writing,
-            "drafting": cfg.llm.ira_model_writing,
-            "verifier": cfg.llm.ira_model_verifier,
-            "verification": cfg.llm.ira_model_verifier,
-            "faithfulness": cfg.llm.ira_model_verifier,
+            "fast": cfg.llm.brain_model_fast,
+            "extract": cfg.llm.brain_model_fast,
+            "extraction": cfg.llm.brain_model_fast,
+            "classification": cfg.llm.brain_model_fast,
+            "reasoning": cfg.llm.brain_model_reasoning,
+            "synthesis": cfg.llm.brain_model_reasoning,
+            "writing": cfg.llm.brain_model_writing,
+            "drafting": cfg.llm.brain_model_writing,
+            "verifier": cfg.llm.brain_model_verifier,
+            "verification": cfg.llm.brain_model_verifier,
+            "faithfulness": cfg.llm.brain_model_verifier,
         }
 
         self._semaphore = asyncio.Semaphore(10)

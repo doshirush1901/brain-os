@@ -24,7 +24,7 @@ def normalize_entity_name(name: str) -> str:
 
 
 def company_search_token(name: str) -> str:
-    """Compact token for matching related :Company nodes (e.g. NAFFCO ↔ Naffco KSA)."""
+    """Compact token for matching related :Company nodes (e.g. DEMO-CO ↔ Demo Regional)."""
     return re.sub(r"[^a-z0-9]", "", (name or "").lower())
 
 

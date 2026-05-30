@@ -369,7 +369,7 @@ def crm_relationship_scan(
         machine_patterns = {
             "IMG": r"\bIMG\b",
             "ATF": r"\bATF\b",
-            "PF1": r"\bPF1\b",
+            "DEMO": r"\bPF1\b",
         }
         company_hits = Counter()
         machine_hits = Counter()

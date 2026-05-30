@@ -395,7 +395,7 @@ async def send_email(
     """Send one email via Gmail (explicit operator approval only).
 
     Requires ``confirm=true`` after the user has approved the exact To/Subject/Body in chat.
-    Mirrors ``POST /api/email/send`` / ``ira email send`` (blacklist, dedupe, NeverBounce, CRM log).
+    Mirrors ``POST /api/email/send`` / ``brain email send`` (blacklist, dedupe, NeverBounce, CRM log).
     Set ``dry_run=true`` to return the payload without calling Gmail.
     """
     from brain_os.interfaces import mcp_server as srv

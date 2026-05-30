@@ -653,7 +653,7 @@ async def run_execute_dispatch(
             logger=logger,
         )
         optional_selected_snap = list(selected_optional)
-        if "[IRA_EMAIL_GOLD_EVAL_v1]" in resolved_input:
+        if "[BRAIN_EMAIL_GOLD_EVAL_v1]" in resolved_input:
             email_gold_eval_json = raw_response.strip()
     else:
         raw_response = await pipeline._pantheon.process(

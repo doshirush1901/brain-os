@@ -40,7 +40,7 @@ async def query_brain(question: str, user_id: str | None = None) -> str:
 
     ``user_id`` scopes conversation history and Mem0 (same as API ``user_id``).
     When omitted or blank, uses ``APP__DEFAULT_USER_ID`` from the host ``.env``
-    (same as ``ira ask``); if that is unset, falls back to ``mcp_user``. Pass
+    (same as ``brain ask``); if that is unset, falls back to ``mcp_user``. Pass
     ``user_id="mcp_user"`` explicitly to keep a shared MCP-only namespace.
     """
     from brain_os.interfaces import mcp_server as srv

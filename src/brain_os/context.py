@@ -41,7 +41,7 @@ class UnifiedContextManager:
     address or any opaque key the caller chooses.  The same ``user_id`` must be used across channels for
     continuity to work.
 
-    Limits default from :class:`~ira.config.AppConfig` (``unified_context_max_*``)
+    Limits default from :class:`~brain_os.config.AppConfig` (``unified_context_max_*``)
     and can be overridden per instance for tests.
     """
 

@@ -26,7 +26,7 @@ _NEGATIVE = re.compile(
     r"^(hi|hello|hey|thanks|thank\s+you|good\s+(morning|afternoon|evening))\b|"
     r"who\s+are\s+you|what\s+is\s+ira|"
     r"no\s+triangulation|skip\s+triangulation|"
-    r"\bpytest\b|\bdocker\b|src/ira|\.py\b|git\s+commit|"
+    r"\bpytest\b|\bdocker\b|src/brain_os|\.py\b|git\s+commit|"
     r"lead\s+time\b|delivery\s+time\b|machine\s+spec"
     r")\b",
     re.IGNORECASE,

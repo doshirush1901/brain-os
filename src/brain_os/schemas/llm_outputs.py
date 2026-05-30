@@ -746,7 +746,7 @@ class TaskPlanPhase(BaseModel):
 
 
 class TaskPlanValidationContract(BaseModel):
-    """Per-task assertion contract (CLI ``ira task`` / TaskOrchestrator)."""
+    """Per-task assertion contract (CLI ``brain task`` / TaskOrchestrator)."""
 
     assertions: list[str] = Field(default_factory=list)
     phase_assertion_map: dict[int, list[int]] = Field(default_factory=dict)

@@ -183,7 +183,7 @@ class KnowledgeHealthMonitor:
                 )
 
         if "heavy gauge" in text_lower and "pf1" not in text_lower:
-            violations.append("Heavy gauge application mentioned without recommending PF1")
+            violations.append("Heavy gauge application mentioned without recommending DEMO")
 
         lead_time_pattern = re.compile(r"(\d+)[-–](\d+)\s*weeks?", re.IGNORECASE)
         for m in lead_time_pattern.finditer(response):

@@ -105,7 +105,7 @@ def _get_guard():
     try:
         from guardrails import Guard
 
-        _guard_instance = Guard(name="ira_output_guard").use_many(_load_validators())
+        _guard_instance = Guard(name="brain_output_guard").use_many(_load_validators())
         logger.info("Guardrails AI loaded with validators")
         return _guard_instance
     except (ImportError, OSError, RuntimeError, ValueError, TypeError, AttributeError) as exc:

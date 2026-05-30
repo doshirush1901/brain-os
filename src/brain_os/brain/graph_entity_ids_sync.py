@@ -1,6 +1,6 @@
 """Sync Neo4j Chunk→entity links into Qdrant payload ``graph_entity_ids``.
 
-After ``ira graph backfill-from-qdrant``, chunks exist in Neo4j with DESCRIBES edges but
+After ``brain graph backfill-from-qdrant``, chunks exist in Neo4j with DESCRIBES edges but
 Qdrant points often lack ``graph_entity_ids``. This module backfills that payload field
 so retrieval can stitch graph hits to vectors without re-embedding.
 """

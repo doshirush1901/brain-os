@@ -1,7 +1,7 @@
 """Nemesis — Trainer / Adversarial agent.
 
 Generates adversarial training scenarios, stress-tests specialist agents,
-and feeds the results back through the :class:`~ira.systems.learning_hub.LearningHub`
+and feeds the results back through the :class:`~brain_os.systems.learning_hub.LearningHub`
 to close the improvement loop.
 
 The primary tool is :meth:`create_training_scenario`, which:
@@ -592,7 +592,7 @@ class Nemesis(BaseAgent):
         if not scenarios:
             scenarios.append(
                 {
-                    "test_query": "What is the lead time for a PF1500 CNC machine order to Saudi Arabia?",
+                    "test_query": "What is the lead time for a DEMO1500 CNC machine order to Saudi Arabia?",
                     "domain": "sales",
                     "difficulty": "medium",
                     "rationale": "Fallback scenario covering sales + production + logistics.",

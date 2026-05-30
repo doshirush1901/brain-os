@@ -3,7 +3,7 @@
 Used by the dashboard to show per-agent (and per-tool) success rates.
 No persistence; resets on process restart.
 
-Optional :class:`~ira.brain.tool_invocation_store.ToolInvocationStore` persists
+Optional :class:`~brain_os.brain.tool_invocation_store.ToolInvocationStore` persists
 each outcome when ``APP__GEPA_PERSIST_TOOL_INVOCATIONS`` is enabled.
 """
 

@@ -162,7 +162,7 @@ def _generate_metadata_local(filename: str, text_preview: str) -> dict[str, Any]
     name_lower = filename.lower()
 
     machines = re.findall(
-        r"(PF1[-\s]?[A-Z]?[-\s]?\d+[-\s]?\d*|AM[-\s]?\w+\d+|IMG[-\s]?\d+|FCS[-\s]?\w+|UNO[-\s]?\w+|DUO[-\s]?\w+)",
+        r"(DEMO[-\s]?[A-Z]?[-\s]?\d+[-\s]?\d*|AM[-\s]?\w+\d+|IMG[-\s]?\d+|FCS[-\s]?\w+|UNO[-\s]?\w+|DUO[-\s]?\w+)",
         filename + " " + text_preview[:500],
         re.IGNORECASE,
     )
@@ -408,7 +408,7 @@ def _stem_words(words: set[str]) -> set[str]:
 # Machine / path scoring — exact set intersection misses DEMO-1325 vs DEMO-X-1325-PWB-UMS
 # or documents whose parent folder carries the model (generic PDF filenames).
 _MACHINE_MODEL_RE = re.compile(
-    r"(PF1[-\s]?[A-Z]?[-\s]?\d+[-\s]?\d*|AM[-\s]?\w+|IMG[-\s]?\d+|FCS[-\s]?\w+|UNO[-\s]?\w+|DUO[-\s]?\w+)",
+    r"(DEMO[-\s]?[A-Z]?[-\s]?\d+[-\s]?\d*|AM[-\s]?\w+|IMG[-\s]?\d+|FCS[-\s]?\w+|UNO[-\s]?\w+|DUO[-\s]?\w+)",
     re.IGNORECASE,
 )
 
@@ -446,7 +446,7 @@ def _machine_match_score(query_machines: set[str], file_machines: list[str]) -> 
             if len(q_alnum) >= 6 and (q_alnum in fm_alnum or fm_alnum in q_alnum):
                 score += 5.0
                 break
-            if q_key and f_key and q_key == f_key and "PF1" in fm and "PF1" in qu:
+            if q_key and f_key and q_key == f_key and "DEMO" in fm and "DEMO" in qu:
                 score += 4.5
                 break
     return score

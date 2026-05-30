@@ -159,7 +159,7 @@ def get_email_ops_public_snapshot() -> dict[str, str | bool]:
     return {
         "email_mode": g.email_mode.value,
         "poll_enabled": g.email_poll_enabled,
-        "primary_mailbox_configured": bool(g.ira_email.strip()),
+        "primary_mailbox_configured": bool(g.brain_email.strip()),
         "primary_oauth_files_present": creds.is_file() and tok.is_file(),
     }
 
@@ -247,18 +247,18 @@ def get_llm_stack_public_snapshot() -> dict[str, str | bool]:
         "openai_model": s.openai_model,
         "anthropic_model": s.anthropic_model,
         "ollama_model": s.ollama_model,
-        "ira_model_fast": s.ira_model_fast,
-        "ira_model_reasoning": s.ira_model_reasoning,
-        "ira_model_writing": s.ira_model_writing,
-        "ira_model_verifier": s.ira_model_verifier,
-        "ira_profile_fast_provider": s.ira_profile_fast_provider or "(baseline)",
-        "ira_profile_reasoning_provider": s.ira_profile_reasoning_provider or "(baseline)",
-        "ira_profile_writing_provider": s.ira_profile_writing_provider or "(baseline)",
-        "ira_profile_verifier_provider": s.ira_profile_verifier_provider or "(baseline)",
-        "ira_anthropic_model_fast_set": bool((s.ira_anthropic_model_fast or "").strip()),
-        "ira_anthropic_model_reasoning_set": bool((s.ira_anthropic_model_reasoning or "").strip()),
-        "ira_anthropic_model_writing_set": bool((s.ira_anthropic_model_writing or "").strip()),
-        "ira_anthropic_model_verifier_set": bool((s.ira_anthropic_model_verifier or "").strip()),
+        "brain_model_fast": s.brain_model_fast,
+        "brain_model_reasoning": s.brain_model_reasoning,
+        "brain_model_writing": s.brain_model_writing,
+        "brain_model_verifier": s.brain_model_verifier,
+        "brain_profile_fast_provider": s.brain_profile_fast_provider or "(baseline)",
+        "brain_profile_reasoning_provider": s.brain_profile_reasoning_provider or "(baseline)",
+        "brain_profile_writing_provider": s.brain_profile_writing_provider or "(baseline)",
+        "brain_profile_verifier_provider": s.brain_profile_verifier_provider or "(baseline)",
+        "brain_anthropic_model_fast_set": bool((s.brain_anthropic_model_fast or "").strip()),
+        "brain_anthropic_model_reasoning_set": bool((s.brain_anthropic_model_reasoning or "").strip()),
+        "brain_anthropic_model_writing_set": bool((s.brain_anthropic_model_writing or "").strip()),
+        "brain_anthropic_model_verifier_set": bool((s.brain_anthropic_model_verifier or "").strip()),
     }
 
 
@@ -368,11 +368,11 @@ def get_runtime_build_public_snapshot() -> dict[str, str]:
     import sys
 
     try:
-        pkg_ver = importlib.metadata.version("ira")
+        pkg_ver = importlib.metadata.version("brain")
     except importlib.metadata.PackageNotFoundError:
         pkg_ver = "unknown"
     return {
-        "ira_package_version": pkg_ver,
+        "brain_package_version": pkg_ver,
         "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
         "platform": sys.platform,
     }
@@ -505,7 +505,7 @@ def get_process_context_public_snapshot() -> dict[str, str | bool]:
     raw = os.environ.get("BRAIN_DATA_DIR", "").strip()
     exe = Path(sys.executable)
     return {
-        "ira_data_dir_env_set": bool(raw),
+        "brain_data_dir_env_set": bool(raw),
         "working_directory_label": str(Path.cwd().resolve())[:112],
         "python_executable_basename": exe.name,
     }
@@ -602,7 +602,7 @@ def get_repo_sources_public_snapshot() -> dict[str, bool | int]:
     prompts = repo_root / "prompts"
     prompt_txt_count = sum(1 for _ in prompts.glob("*.txt")) if prompts.is_dir() else 0
     return {
-        "src_ira_package_present": (repo_root / "src" / "ira" / "__init__.py").is_file(),
+        "src_ira_package_present": (repo_root / "src" / "brain" / "__init__.py").is_file(),
         "prompts_dir_present": prompts.is_dir(),
         "prompt_txt_files_count": prompt_txt_count,
         "tests_dir_present": (repo_root / "tests").is_dir(),

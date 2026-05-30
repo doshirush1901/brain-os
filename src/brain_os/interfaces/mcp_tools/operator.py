@@ -11,7 +11,7 @@ from mcp.server.fastmcp import FastMCP
 from brain_os.interfaces.mcp_tool_hardening import hardened_mcp_tool
 from brain_os.interfaces.server_runtime import _svc
 from brain_os.service_keys import ServiceKey as SK
-from brain_os.services.ira_daily_dashboard import get_dashboard_today
+from brain_os.services.brain_daily_dashboard import get_dashboard_today
 from brain_os.services.operator_activity_today import (
     format_operator_activity_today_text,
     gather_operator_activity_today,

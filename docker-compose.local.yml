@@ -1,11 +1,6 @@
 # Local development only. Default passwords and ports match .env.example; change all
 # secrets before any shared or production use. Volumes under ./data/ are gitignored.
 services:
-  # Qdrant: local instance for reliable development and offline use.
-  # Neo4j: local instance below. Default host ports 7475/7688 avoid clashing with another
-  # stack (e.g. another Neo4j on 7474/7687). Set NEO4J_URI=bolt://localhost:7688.
-  # Optional: NEO4J_CLOUD_URI + NEO4J_CLOUD_PASSWORD to mirror writes to Aura.
-
   qdrant:
     image: qdrant/qdrant:v1.12.5
     restart: unless-stopped
@@ -22,7 +17,7 @@ services:
       retries: 5
       start_period: 25s
     networks:
-      - ira-network
+      - brain-network
 
   neo4j:
     image: neo4j:5.15.0-community
@@ -30,11 +25,6 @@ services:
     ports:
       - "7475:7474"
       - "7688:7687"
-    # Do not set NEO4J_AUTH when ./data/neo4j already has dbms/auth.ini — the image
-    # entrypoint would re-run password init and can fail with "already running (pid:7)".
-    # First boot only: add environment NEO4J_AUTH: neo4j/ira_knowledge_graph then remove it.
-    # If Neo4j won't start ("already running (pid:7)"), recreate the container after stopping it;
-    # see docs/TROUBLESHOOTING.md for stale-volume / pid collision notes.
     volumes:
       - ./data/neo4j:/data
     mem_limit: 2g
@@ -45,7 +35,7 @@ services:
       retries: 6
       start_period: 60s
     networks:
-      - ira-network
+      - brain-network
 
   postgres:
     image: postgres:16-alpine
@@ -53,20 +43,20 @@ services:
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_USER: ira
-      POSTGRES_PASSWORD: ira
-      POSTGRES_DB: ira_crm
+      POSTGRES_USER: brain
+      POSTGRES_PASSWORD: brain
+      POSTGRES_DB: brain_crm
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
     mem_limit: 512m
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ira -d ira_crm"]
+      test: ["CMD-SHELL", "pg_isready -U brain -d brain_crm"]
       interval: 10s
       timeout: 5s
       retries: 6
       start_period: 20s
     networks:
-      - ira-network
+      - brain-network
 
   redis:
     image: redis:7.2-alpine
@@ -83,8 +73,8 @@ services:
       retries: 5
       start_period: 15s
     networks:
-      - ira-network
+      - brain-network
 
 networks:
-  ira-network:
+  brain-network:
     driver: bridge

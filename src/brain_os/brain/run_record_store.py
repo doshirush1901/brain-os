@@ -33,7 +33,7 @@ def run_records_db_path() -> Path:
 
 
 class RunRecordStore:
-    """SQLite store for :class:`~ira.schemas.run_record.RunRecord` JSON payloads."""
+    """SQLite store for :class:`~brain_os.schemas.run_record.RunRecord` JSON payloads."""
 
     def __init__(self, *, db_path: Path | None = None) -> None:
         self._db_path = db_path or run_records_db_path()

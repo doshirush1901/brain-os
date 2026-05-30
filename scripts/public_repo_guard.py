@@ -214,12 +214,48 @@ _IDENTITY_LITERALS = ("rushabh@", "rushabh doshi")
 _DEIRA_FRAGMENTS = (
     "ira-v3",
     "ira-universe",
+    "ira_universe",
     "query_ira",
     "ira_segment",
     "ira-pimp",
     "iraerror",
+    "ira-network",
+    "ira:ira@",
+    "src/ira",
+    "poetry run ira",
+    "``ira ",
+    "`ira ",
+    "ira brief",
+    "ira ask",
+    "ira tinder",
+    "ira_universe",
+    "republish_ira",
+    "export_ira_universe",
 )
-_DEIRA_BRAND_PREFIXES = ("src/", "prompts/", "docs/")
+_CUSTOMER_FRAGMENTS = (
+    "faure france",
+    "faure ",
+    "tvs motor",
+    "dashmesh",
+    "pattison sign",
+    "naffco",
+    "mikhail",
+    "gerwin",
+    "machinecraft",
+    "rushabh@",
+    "plastindia",
+    "formpack.in",
+    "data/imports/",
+)
+_DEIRA_BRAND_PREFIXES = (
+    "src/",
+    "prompts/",
+    "docs/",
+    "examples/",
+    "alembic/",
+    "docker-compose",
+    "export_manifest.json",
+)
 _VERTICAL_FRAGMENTS = (
     "machinecraft.org",
     "machinecraft.in",
@@ -264,14 +300,25 @@ def _scan_public_identity(rel: str, text: str, hits: list[str]) -> None:
 
 def _scan_deira_branding(rel: str, text: str, hits: list[str]) -> None:
     """Public brain-os must not reference the Ira operator product by name."""
-    if not rel.startswith(_DEIRA_BRAND_PREFIXES):
+    if rel == "scripts/public_repo_guard.py":
+        return
+    if not (
+        rel.startswith(_DEIRA_BRAND_PREFIXES)
+        or rel == "export_manifest.json"
+        or rel.startswith("docker-compose")
+    ):
         return
     lower = text.lower()
     for frag in _DEIRA_FRAGMENTS:
         if frag in lower:
             hits.append(f"{rel}: forbidden Ira-brand fragment `{frag}`")
+    for frag in _CUSTOMER_FRAGMENTS:
+        if frag in lower:
+            hits.append(f"{rel}: forbidden customer/vertical fragment `{frag}`")
     if re.search(r"\bIra\b", text):
         hits.append(f"{rel}: forbidden brand token `Ira`")
+    if re.search(r"\bPF1\b", text) and "public_repo_guard" not in rel:
+        hits.append(f"{rel}: forbidden vertical model token `PF1`")
 
 
 def _scan_text(rel: str, text: str, allow: dict, hits: list[str]) -> None:

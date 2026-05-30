@@ -28,7 +28,7 @@ _VALIDATOR_MODES = frozenset({"strict", "crm_only", "relaxed_evidence"})
 
 # Substrings that must not appear in validator prompts (builder trace anti-pattern).
 _FORBIDDEN_VALIDATOR_PROMPT_MARKERS = (
-    "IRA_TOOL_META",
+    "BRAIN_TOOL_META",
     "react_observation",
     "tool_call_id",
     "<<<HANDOFF_BRIEF>>>",

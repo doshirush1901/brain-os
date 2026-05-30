@@ -251,7 +251,7 @@ async def shape_pipeline_response(
     if email_gold_eval_json is not None:
         shaped = email_gold_eval_json
         record_shape_stage()
-        logger.info("SHAPE | skipped voice (IRA_EMAIL_GOLD_EVAL_v1) len=%d", len(shaped))
+        logger.info("SHAPE | skipped voice (BRAIN_EMAIL_GOLD_EVAL_v1) len=%d", len(shaped))
         return shaped
 
     full_response = confidence_prefix + raw_response + reflection_text

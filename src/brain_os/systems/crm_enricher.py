@@ -429,7 +429,7 @@ class CRMEnricher:
     @staticmethod
     def _extract_machine_model(content: str) -> str:
         patterns = [
-            r"(PF1[-\s]?[A-Z]?[-\s]?\d{3,5}(?:[-\s]?[A-Z]{1,3})?)",
+            r"(DEMO[-\s]?[A-Z]?[-\s]?\d{3,5}(?:[-\s]?[A-Z]{1,3})?)",
             r"(PF[12][-\s]?[XCAPS]?[-\s]?\d{3,5})",
             r"(AM[-\s]?[A-Z]?[-\s]?\d{3,5})",
             r"(FCS[-\s]?\w+)",

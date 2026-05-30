@@ -624,7 +624,7 @@ class Alexandros(BaseAgent):
         if total == 0:
             return (
                 "Alexandros: Archive is empty. Files uploaded via /api/ingest are indexed "
-                "automatically. For files added directly to examples/acme/docs/, run `ira index-imports`."
+                "automatically. For files added directly to examples/acme/docs/, run `brain index-imports`."
             )
 
         by_folder: dict[str, int] = {}

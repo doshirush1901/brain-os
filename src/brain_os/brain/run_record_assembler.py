@@ -1,4 +1,4 @@
-"""Assemble :class:`~ira.schemas.run_record.RunRecord` from pipeline context."""
+"""Assemble :class:`~brain_os.schemas.run_record.RunRecord` from pipeline context."""
 
 from __future__ import annotations
 

@@ -599,7 +599,7 @@ class OperatorInboxService:
             if not to_addr or "@" not in to_addr:
                 return {
                     "ok": False,
-                    "error": "Recipient email required — pass to_address on decide or run ira revenue gmail-draft.",
+                    "error": "Recipient email required — pass to_address on decide or run brain revenue gmail-draft.",
                     "needs_to": True,
                     "company_name": company,
                 }

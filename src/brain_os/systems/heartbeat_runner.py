@@ -1,18 +1,18 @@
-"""Scheduled jobs: optional ``ira ask``-style pipeline runs or queue-only hooks.
+"""Scheduled jobs: optional ``brain ask``-style pipeline runs or queue-only hooks.
 
 Jobs are defined as a JSON array (see ``APP__HEARTBEAT_JOBS_PATH``).  Each
 object has a ``name`` and ``interval_hours``.  Either:
 
 * ``query`` — run :meth:`brain_os.pipeline.RequestPipeline.process_request` when due, or
 * ``action`` == ``enqueue_pending_memory`` plus non-empty ``body`` — append to
-  :class:`~ira.memory.pending_memory_queue.PendingMemoryQueue` (no LLM / no pipeline).
+  :class:`~brain_os.memory.pending_memory_queue.PendingMemoryQueue` (no LLM / no pipeline).
 * ``action`` == ``hephaestion_nightly`` / ``hephaestion_weekly`` / ``hephaestion_monthly`` —
-  system audit snapshots (``ira audit system``).
+  system audit snapshots (``brain audit system``).
 * ``action`` == ``prediction_reconcile`` — closed-loop hot-lead prediction reconciliation
   (optional ``skip_llm``; no ``query`` required).
 * ``action`` == ``agent_journal`` — first-person agent reflections (``DreamMode.run_journal_only``;
   optional ``since_last_journal`` default true, ``lookback_hours`` default 12).
-* ``action`` == ``pantheon_conference`` — weekly AI Engineering Conference (``ira conference run``);
+* ``action`` == ``pantheon_conference`` — weekly AI Engineering Conference (``brain conference run``);
   runs only on configured weekday (default Sunday IST) unless heartbeat ``--force``.
 """
 
@@ -329,7 +329,7 @@ async def run_heartbeat_jobs(
 
         if action == "operator_daily_dashboard":
             try:
-                from brain_os.services.ira_daily_dashboard import build_and_persist_daily_snapshot
+                from brain_os.services.brain_daily_dashboard import build_and_persist_daily_snapshot
 
                 target_date = str(job.get("local_date") or "").strip() or None
                 skip_llm = bool(job.get("skip_llm", False))

@@ -32,7 +32,7 @@ target_metadata = Base.metadata
 def _get_url() -> str:
     return os.environ.get(
         "DATABASE_URL",
-        "postgresql+asyncpg://ira:ira@localhost:5432/ira_crm",
+        "postgresql+asyncpg://brain:brain@localhost:5432/brain_crm",
     )
 
 

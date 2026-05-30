@@ -71,7 +71,7 @@ async def resolve_operator_route(kind: OperatorRouteKind) -> str:
         return await _resolve_stale_leads()
     if kind == OperatorRouteKind.HOT_BOARD:
         return _resolve_hot_board()
-    if kind == OperatorRouteKind.LEAD_TIME_PF1:
+    if kind == OperatorRouteKind.LEAD_TIME_DEMO:
         return await _resolve_lead_time_pf1()
     return ""
 
@@ -80,7 +80,7 @@ async def _resolve_revenue_brief() -> str:
     from brain_os.config import get_settings
     from brain_os.services.revenue_mode_desk import format_revenue_brief_text
 
-    mode = get_settings().ira_revenue_mode
+    mode = get_settings().brain_revenue_mode
     return format_revenue_brief_text(revenue_mode_label=mode)
 
 
@@ -88,7 +88,7 @@ def _resolve_revenue_desk() -> str:
     from brain_os.config import get_settings
     from brain_os.services.revenue_mode_desk import revenue_brief_payload
 
-    mode = get_settings().ira_revenue_mode
+    mode = get_settings().brain_revenue_mode
     payload = revenue_brief_payload(revenue_mode_label=mode)
     must = len(payload.get("must_act_today") or [])
     drafts = len(payload.get("drafts_awaiting_approval") or [])
@@ -143,7 +143,7 @@ async def _resolve_lead_time_pf1() -> str:
 
         engine = TruthHintsEngine()
         await engine._load()
-        hint = engine.match("What is the lead time for a PF1?")
+        hint = engine.match("What is the lead time for a DEMO?")
         if hint is not None:
             answer = str(hint.get("answer") or "").strip()
             if answer:

@@ -568,6 +568,6 @@ class Plutus(BaseAgent):
             ):
                 return token
         for i, token in enumerate(tokens):
-            if token in ("PF1", "DEMO2") and i + 1 < len(tokens):
+            if token in ("DEMO", "DEMO2") and i + 1 < len(tokens):
                 return f"{token}-{tokens[i + 1]}"
         return ""

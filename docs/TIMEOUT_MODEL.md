@@ -146,4 +146,4 @@ Individual tool invocations use `brain_os.services.tool_runner.run_tool` (retrie
 | ReAct per-tool ceiling | `APP__REACT_TOOL_TIMEOUT_SECONDS` | `45` | `BaseAgent._execute_tool`, `use_skill`. |
 | MCP per-tool ceiling | `APP__MCP_TOOL_TIMEOUT_SECONDS` | `60` | `hardened_mcp_tool` on MCP registrations. |
 
-ReAct observations include `attempts` in `IRA_TOOL_META`; MCP failures return `Error (tool_name): … [attempts=N]`. CI: `python scripts/ci/check_tool_runner_adoption.py`.
+ReAct observations include `attempts` in `BRAIN_TOOL_META`; MCP failures return `Error (tool_name): … [attempts=N]`. CI: `python scripts/ci/check_tool_runner_adoption.py`.

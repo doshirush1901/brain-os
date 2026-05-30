@@ -25,7 +25,7 @@ SKILL_MATRIX: dict[str, str] = {
     "update_crm_record": ("Push structured updates (stage changes, notes) to a CRM record."),
     # ── Finance & Pricing ────────────────────────────────────────────────
     "calculate_quote": ("Build a line-item quote from product specs and pricing rules."),
-    "formpack_akash_quick_quote_workflow": (
+    "partnerpack_demo_quote_workflow": (
         "Documented workflow for indicative part cost, trimming, and tooling (FRP forming, "
         "cutting fixture) via the PartnerPack / AskAkash quick-quote chat bot before customer emails."
     ),

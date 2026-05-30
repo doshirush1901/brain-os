@@ -1,4 +1,4 @@
-"""CLI: ``ira operator`` — unified approval inbox."""
+"""CLI: ``brain operator`` — unified approval inbox."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from rich.table import Table
 
 from brain_os.interfaces.cli_runtime import _configure_logging
 from brain_os.service_keys import ServiceKey as SK
-from brain_os.services.ira_daily_dashboard import (
+from brain_os.services.brain_daily_dashboard import (
     build_and_persist_daily_snapshot,
     compute_dashboard_stats,
     get_dashboard_today,

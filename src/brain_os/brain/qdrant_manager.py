@@ -1,9 +1,9 @@
 """Qdrant vector-database manager for Brain OS's knowledge base.
 
 Provides collection lifecycle management, batched upserts of
-:class:`~ira.data.models.KnowledgeItem` objects, dense vector search,
+:class:`~brain_os.data.models.KnowledgeItem` objects, dense vector search,
 and hybrid (dense + keyword filter) retrieval.  All operations are async
-and go through :class:`~ira.brain.embeddings.EmbeddingService` for
+and go through :class:`~brain_os.brain.embeddings.EmbeddingService` for
 embedding generation.
 """
 

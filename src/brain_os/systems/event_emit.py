@@ -1,4 +1,4 @@
-"""Fire-and-forget helpers for :class:`~ira.systems.data_event_bus.DataEventBus`."""
+"""Fire-and-forget helpers for :class:`~brain_os.systems.data_event_bus.DataEventBus`."""
 
 from __future__ import annotations
 

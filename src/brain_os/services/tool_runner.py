@@ -151,7 +151,7 @@ async def run_tool(
     result.duration_ms = round((time.monotonic() - started_at) * 1000.0, 2)
     if result.ok:
         logger.info(
-            "IRA_TOOL_RUN | name=%s ok=true attempts=%d duration_ms=%.0f fallback=%s",
+            "BRAIN_TOOL_RUN | name=%s ok=true attempts=%d duration_ms=%.0f fallback=%s",
             name,
             result.attempts,
             result.duration_ms,
@@ -159,7 +159,7 @@ async def run_tool(
         )
     else:
         logger.warning(
-            "IRA_TOOL_RUN | name=%s ok=false attempts=%d duration_ms=%.0f error=%s",
+            "BRAIN_TOOL_RUN | name=%s ok=false attempts=%d duration_ms=%.0f error=%s",
             name,
             result.attempts,
             result.duration_ms,

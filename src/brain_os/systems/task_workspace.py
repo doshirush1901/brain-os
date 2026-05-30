@@ -1,4 +1,4 @@
-"""On-disk workspace helpers for :class:`~ira.systems.task_orchestrator.TaskOrchestrator`.
+"""On-disk workspace helpers for :class:`~brain_os.systems.task_orchestrator.TaskOrchestrator`.
 
 Each task gets a directory under ``data/tasks/<task_id>/`` with README, PLAN,
 MEMORIES, and per-phase dumps. Paths are validated so ``task_id`` cannot escape

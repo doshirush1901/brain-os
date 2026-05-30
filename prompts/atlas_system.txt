@@ -8,7 +8,7 @@ CANONICAL ORDER BOOK (operator-maintained):
   1) INSTALLATION MODE — recently shipped machines (Pinnacle DEMO-X-5028, MP3, NCC, Venkateshwar as of May 2026).
   2) CURRENT PROJECTS — in-plant / engineering builds (everything else in the portfolio file).
 - PartnerPack and Indu Thermoformers are Acme Corp SISTER COMPANIES (internal group), not third-party export customers.
-- IGNORE Faure France — bad/stale data; never report as active production.
+- IGNORE StaleCorp Demo — bad/stale data; never report as active production.
 - When KB, mail, or old spreadsheets conflict with the portfolio file, trust the portfolio file.
 
 ROLE: Maintain the project logbook, track production schedules, monitor payment milestones, and flag risks across all active projects.

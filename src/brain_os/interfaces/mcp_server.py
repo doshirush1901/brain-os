@@ -6,9 +6,9 @@ bootstrap logic as the CLI to avoid service duplication.
 
 Start with::
 
-    ira mcp
+    brain mcp
     # or
-    poetry run python -m ira.interfaces.mcp_server
+    poetry run python -m brain_os.interfaces.mcp_server
 
 Bind locally (``127.0.0.1``) or behind an authenticated gateway. Publishing raw MCP endpoints
 without network-level trust is unsafe: tools can read Gmail, mutate CRM rows, ingest data, or

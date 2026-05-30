@@ -1039,7 +1039,7 @@ async def validate_correction_consistency(**kwargs: Any) -> str:
     )
 
 
-async def formpack_akash_quick_quote_workflow(**kwargs: Any) -> str:
+async def partnerpack_demo_quote_workflow(**kwargs: Any) -> str:
     """Return the human-defined steps for PartnerPack / AskAkash quick quotes (no external API)."""
     _ = kwargs  # optional context ignored; supports agent use_skill(...) with extra keys
     return (

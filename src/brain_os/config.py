@@ -37,10 +37,10 @@ class LLMConfig(BaseSettings):
     openai_model: str = "gpt-4.1"
     anthropic_model: str = "claude-sonnet-4-20250514"
     # Task-specific model profiles. Source-of-truth data comes from CRM/RAG/email/tools.
-    ira_model_fast: str = "gpt-4.1-mini"
-    ira_model_reasoning: str = "gpt-5.5"
-    ira_model_writing: str = "gpt-5.5"
-    ira_model_verifier: str = "gpt-4.1-mini"
+    brain_model_fast: str = "gpt-4.1-mini"
+    brain_model_reasoning: str = "gpt-5.5"
+    brain_model_writing: str = "gpt-5.5"
+    brain_model_verifier: str = "gpt-4.1-mini"
     #: Local OpenAI-compatible endpoint (Ollama). Example: http://localhost:11434/v1 or http://host:11434
     ollama_base_url: str = ""
     #: Optional; Ollama ignores this locally — defaults to a dummy in LLMClient when unset.
@@ -65,7 +65,7 @@ class LLMConfig(BaseSettings):
     #: Global default for Pantheon agents when set to ``ollama`` and ``OLLAMA_BASE_URL`` is non-empty.
     default_llm_provider: Literal["openai", "anthropic", "ollama"] = Field(
         default="openai",
-        validation_alias=AliasChoices("IRA_DEFAULT_LLM_PROVIDER", "DEFAULT_LLM_PROVIDER"),
+        validation_alias=AliasChoices("BRAIN_DEFAULT_LLM_PROVIDER", "DEFAULT_LLM_PROVIDER"),
     )
 
     @field_validator("default_llm_provider", mode="before")
@@ -85,38 +85,38 @@ class LLMConfig(BaseSettings):
         normalized = profile.strip().lower().replace("-", "_")
         mapping = {
             "default": self.openai_model,
-            "fast": self.ira_model_fast,
-            "extract": self.ira_model_fast,
-            "extraction": self.ira_model_fast,
-            "classification": self.ira_model_fast,
-            "reasoning": self.ira_model_reasoning,
-            "synthesis": self.ira_model_reasoning,
-            "writing": self.ira_model_writing,
-            "drafting": self.ira_model_writing,
-            "verifier": self.ira_model_verifier,
-            "verification": self.ira_model_verifier,
-            "faithfulness": self.ira_model_verifier,
+            "fast": self.brain_model_fast,
+            "extract": self.brain_model_fast,
+            "extraction": self.brain_model_fast,
+            "classification": self.brain_model_fast,
+            "reasoning": self.brain_model_reasoning,
+            "synthesis": self.brain_model_reasoning,
+            "writing": self.brain_model_writing,
+            "drafting": self.brain_model_writing,
+            "verifier": self.brain_model_verifier,
+            "verification": self.brain_model_verifier,
+            "faithfulness": self.brain_model_verifier,
         }
         return mapping.get(normalized, self.openai_model)
 
     #: Optional per-profile **provider** override for tiered routing (empty = use baseline primary).
     #: When set to ``openai`` / ``anthropic`` / ``ollama``, :meth:`resolve_primary_provider_for_profile`
     #: uses this for matching ``model_profile`` on agent ``call_llm`` / ReAct ``_reason`` paths.
-    ira_profile_fast_provider: str = ""
-    ira_profile_reasoning_provider: str = ""
-    ira_profile_writing_provider: str = ""
-    ira_profile_verifier_provider: str = ""
+    brain_profile_fast_provider: str = ""
+    brain_profile_reasoning_provider: str = ""
+    brain_profile_writing_provider: str = ""
+    brain_profile_verifier_provider: str = ""
     #: Optional Anthropic model per logical profile (empty = ``anthropic_model`` for that profile).
-    ira_anthropic_model_fast: str = ""
-    ira_anthropic_model_reasoning: str = ""
-    ira_anthropic_model_writing: str = ""
-    ira_anthropic_model_verifier: str = ""
+    brain_anthropic_model_fast: str = ""
+    brain_anthropic_model_reasoning: str = ""
+    brain_anthropic_model_writing: str = ""
+    brain_anthropic_model_verifier: str = ""
 
     @field_validator(
-        "ira_profile_fast_provider",
-        "ira_profile_reasoning_provider",
-        "ira_profile_writing_provider",
-        "ira_profile_verifier_provider",
+        "brain_profile_fast_provider",
+        "brain_profile_reasoning_provider",
+        "brain_profile_writing_provider",
+        "brain_profile_verifier_provider",
         mode="before",
     )
     @classmethod
@@ -143,10 +143,10 @@ class LLMConfig(BaseSettings):
         if base not in ("openai", "anthropic", "ollama"):
             base = "openai"
         norm = (model_profile or "").strip().lower().replace("-", "_")
-        fast_p = self.ira_profile_fast_provider
-        reasoning_p = self.ira_profile_reasoning_provider
-        writing_p = self.ira_profile_writing_provider
-        verifier_p = self.ira_profile_verifier_provider
+        fast_p = self.brain_profile_fast_provider
+        reasoning_p = self.brain_profile_reasoning_provider
+        writing_p = self.brain_profile_writing_provider
+        verifier_p = self.brain_profile_verifier_provider
         by_profile: dict[str, str] = {
             "fast": fast_p,
             "extract": fast_p,
@@ -179,7 +179,7 @@ class QdrantConfig(BaseSettings):
 
     url: str = "http://localhost:6333"
     api_key: SecretStr = SecretStr("")
-    collection: str = "ira_knowledge_v3"
+    collection: str = "brain_knowledge_v3"
     # Request timeout in seconds (avoids indefinite hang when Qdrant is slow or unreachable)
     timeout: float = 30.0
     # Optional: second cluster used when the primary (url) is unreachable (connect/timeout).
@@ -192,7 +192,7 @@ class QdrantConfig(BaseSettings):
     cloud_api_key: SecretStr = SecretStr("")
 
     # When APP__USE_SPARSE_HYBRID=true, this collection is used (dense + sparse vectors). Re-ingest to populate.
-    collection_hybrid: str = "ira_knowledge_hybrid"
+    collection_hybrid: str = "brain_knowledge_hybrid"
 
 
 class Neo4jConfig(BaseSettings):
@@ -225,7 +225,7 @@ class Neo4jConfig(BaseSettings):
                 return auth_user, auth_password
         if "localhost" in self.uri or "127.0.0.1" in self.uri:
             # Local docker-compose default (safe dev fallback).
-            return user, "ira_knowledge_graph"
+            return user, "brain_knowledge_graph"
         return user, ""
 
     def resolved_cloud_auth(self) -> tuple[str, str] | None:
@@ -254,7 +254,7 @@ class Neo4jConfig(BaseSettings):
 class DatabaseConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="DATABASE_", **_COMMON)
 
-    url: str = "postgresql+asyncpg://ira:ira@localhost:5432/ira_crm"
+    url: str = "postgresql+asyncpg://brain:brain@localhost:5432/brain_crm"
 
 
 class MemoryConfig(BaseSettings):
@@ -270,15 +270,15 @@ class GoogleConfig(BaseSettings):
     token_path: Path = Path("token.json")
     oauth_client_id: str = ""
     oauth_client_secret: SecretStr = SecretStr("")
-    ira_email: str = ""
+    brain_email: str = ""
     training_email: str = ""
     email_mode: EmailMode = Field(
         default=EmailMode.TRAINING,
-        validation_alias="IRA_EMAIL_MODE",
+        validation_alias="BRAIN_EMAIL_MODE",
     )
     email_poll_enabled: bool = Field(
         default=False,
-        validation_alias="IRA_EMAIL_POLL",
+        validation_alias="BRAIN_EMAIL_POLL",
     )
     # Optional second mailbox (read-only, e.g. procurement/vendor). When set, search and observe both.
     secondary_credentials_path: Path | None = Field(
@@ -289,7 +289,7 @@ class GoogleConfig(BaseSettings):
     )
     secondary_oauth_client_id: str = ""
     secondary_oauth_client_secret: SecretStr = SecretStr("")
-    #: When True with ``IRA_EMAIL_MODE=OPERATIONAL``, secondary mailbox uses the same Gmail
+    #: When True with ``BRAIN_EMAIL_MODE=OPERATIONAL``, secondary mailbox uses the same Gmail
     #: scopes as primary (read, compose, send). Requires deleting the secondary token and
     #: re-authenticating after enabling. See ``docs/TROUBLESHOOTING.md`` (dual mailbox).
     secondary_full_access: bool = Field(
@@ -557,7 +557,7 @@ class HonchoConfig(BaseSettings):
     api_base: str = "https://api.honcho.dev"
     api_key: SecretStr = SecretStr("")
     workspace_id: str = ""
-    assistant_peer_id: str = "ira"
+    assistant_peer_id: str = "brain"
     dialectic_query: str = (
         "In 6 bullet points or fewer, summarize this peer's communication style, "
         "stated goals, constraints, and how Brain OS should adapt. Be concrete; omit speculation."
@@ -613,9 +613,9 @@ class AppConfig(BaseSettings):
     max_parallel_agents: int = 5
     deployment_profile: Literal["full", "edge"] = "full"
     faithfulness_heuristic_only: bool = False
-    ira_route_provider: str = ""
-    ira_synthesis_provider: str = ""
-    ira_embedding_provider: str = ""
+    brain_route_provider: str = ""
+    brain_synthesis_provider: str = ""
+    brain_embedding_provider: str = ""
     vault_export_default_dir: str = ""
     # Athena's timeout to package the final answer (LLM synthesis) for Cursor/API.
     athena_synthesis_timeout: int = 90
@@ -730,7 +730,7 @@ class AppConfig(BaseSettings):
 
     #: Which API bills **structured** LLM steps in document ingestion (DigestiveSystem: classify,
     #: summarize, email metadata, contact extraction) and the KnowledgeGraph legacy entity fallback.
-    #: Use ``anthropic`` to spend Claude credits during bulk ``ira ingest``, or ``ollama`` for local
+    #: Use ``anthropic`` to spend Claude credits during bulk ``brain ingest``, or ``ollama`` for local
     #: zero-cost inference when ``OLLAMA_BASE_URL`` is set; embeddings stay on Voyage.
     digestive_llm_provider: Literal["openai", "anthropic", "ollama"] = "openai"
     #: When ``digestive_llm_provider`` is ``anthropic``, model id for ingest-only structured calls (alias ok).
@@ -755,7 +755,7 @@ class AppConfig(BaseSettings):
     standing_goal_enabled: bool = True
     standing_goal_max_turns: int = Field(default=20, ge=1, le=100)
     standing_goal_max_phases: int = Field(default=20, ge=1, le=100)
-    #: When False, phase validator LLM errors fail closed in strict mode (MCP + ``ira task``).
+    #: When False, phase validator LLM errors fail closed in strict mode (MCP + ``brain task``).
     phase_validator_fail_open: bool = Field(
         default=True,
         validation_alias=AliasChoices(
@@ -763,7 +763,7 @@ class AppConfig(BaseSettings):
             "PHASE_VALIDATOR_FAIL_OPEN",
         ),
     )
-    #: Run per-phase contract validator after each ``ira task`` specialist phase.
+    #: Run per-phase contract validator after each ``brain task`` specialist phase.
     task_phase_validator_enabled: bool = Field(
         default=True,
         validation_alias=AliasChoices(
@@ -818,11 +818,11 @@ class AppConfig(BaseSettings):
     # When HTTP/API (or other callers) omit user_id, use this stable key so
     # ConversationMemory + Mem0 grow under one identity. Prefer your work email
     # in .env, e.g. APP__DEFAULT_USER_ID=you@example.com
-    default_user_id: str = "ira_default_user"
+    default_user_id: str = "brain_default_user"
 
-    #: When True, ``ira ask`` / ``ira chat`` / ``ira task`` behave like ``--auto-fallback-api`` was passed
+    #: When True, ``brain ask`` / ``brain chat`` / ``brain task`` behave like ``--auto-fallback-api`` was passed
     #: whenever the data-dir lock cannot be acquired: after ``GET /api/health`` preflight they call the
-    #: running API (``POST /api/query`` or task stream). Use when you routinely keep ``ira server`` up and
+    #: running API (``POST /api/query`` or task stream). Use when you routinely keep ``brain server`` up and
     #: still want one-shot CLI from Cursor or scripts without passing the flag each time.
     auto_fallback_api_on_data_dir_lock: bool = False
 
@@ -912,12 +912,12 @@ class AppConfig(BaseSettings):
     #: ``user`` — per ``sender_id`` / ``user_id``; ``global`` — one counter for the deployment.
     llm_budget_scope: str = Field(default="user")
 
-    #: JSON list of heartbeat jobs (scheduled ``ira ask``-style runs). See ``scripts/heartbeat_jobs.example.json``.
+    #: JSON list of heartbeat jobs (scheduled ``brain ask``-style runs). See ``scripts/heartbeat_jobs.example.json``.
     heartbeat_jobs_path: str = Field(default="data/heartbeat_jobs.json")
-    #: In-process scheduler on the API server (``ira heartbeat run`` remains CLI/cron).
+    #: In-process scheduler on the API server (``brain heartbeat run`` remains CLI/cron).
     heartbeat_server_enabled: bool = False
     heartbeat_server_interval_minutes: int = Field(default=15, ge=1, le=1440)
-    #: Embed Slack Socket Mode listener in the API server (``ira server``); see ``docs/SLACK_CHAT.md``.
+    #: Embed Slack Socket Mode listener in the API server (``brain server``); see ``docs/SLACK_CHAT.md``.
     slack_listen_enabled: bool = False
     #: ``EventTaskReactor`` — spawn bounded tasks from ``data/event_task_rules.json``.
     event_task_reactor_enabled: bool = False
@@ -928,13 +928,13 @@ class AppConfig(BaseSettings):
     hephaestion_golden_auto_write: bool = False
     hephaestion_skip_pytest_cov: bool = True
     hephaestion_brief_webhook: bool = False
-    #: SQLite queue drained into Mem0 during dream (``ira memory pending add`` / heartbeat enqueue action).
+    #: SQLite queue drained into Mem0 during dream (``brain memory pending add`` / heartbeat enqueue action).
     pending_memory_queue_path: str = Field(default="data/brain/pending_memory_queue.sqlite")
     #: Background deep consolidation cadence (Dream cycle) while the API server is running.
     #: 0 disables interval scheduling; nightly exhale still runs.
     deep_consolidation_interval_hours: float = Field(default=6.0, ge=0.0, le=168.0)
 
-    #: Weekly Pantheon AI Engineering Conference (``ira conference run`` / heartbeat).
+    #: Weekly Pantheon AI Engineering Conference (``brain conference run`` / heartbeat).
     pantheon_conference_enabled: bool = True
     pantheon_conference_output_dir: str = Field(default="data/reports")
     pantheon_conference_batch_size: int = Field(default=4, ge=1, le=12)
@@ -968,22 +968,22 @@ class AppConfig(BaseSettings):
     scheduling_token_secret: SecretStr = SecretStr("")
     scheduling_default_timezone: str = "Asia/Kolkata"
     #: Brain OS in-service date (first foundation commit). Pantheon ``age_in_days`` uses this.
-    ira_birth_date: date = Field(default=date(2026, 3, 6))
+    brain_birth_date: date = Field(default=date(2026, 3, 6))
     #: Operator IANA timezone for pipeline clock injection (IST by default).
     operator_timezone: str = "Asia/Kolkata"
     #: Inject authoritative date/time block into pipeline enrichment (step 5.5).
-    ira_temporal_context_enabled: bool = True
+    brain_temporal_context_enabled: bool = True
     #: Life phase hint: awake | dream | briefing | quiet.
-    ira_time_mode: Literal["awake", "dream", "briefing", "quiet"] = "awake"
+    brain_time_mode: Literal["awake", "dream", "briefing", "quiet"] = "awake"
     #: Tech-industry "internet years" ratio (Vint Cerf, 1999): 1 calendar year at full load
     #: ≈ this many Brain OS experience years. Default 7 → ~52.2 calendar days per Brain OS-year.
-    ira_internet_years_ratio: float = Field(default=7.0, ge=1.0, le=52.0)
+    brain_internet_years_ratio: float = Field(default=7.0, ge=1.0, le=52.0)
     #: Weight experiential age by dream/journal/runs/operator signals (else full load).
-    ira_experience_activity_weighting: bool = True
+    brain_experience_activity_weighting: bool = True
     #: Minimum activity multiplier when idle (still ages slowly).
-    ira_experience_idle_floor: float = Field(default=0.15, ge=0.0, le=1.0)
+    brain_experience_idle_floor: float = Field(default=0.15, ge=0.0, le=1.0)
     #: Lookback window (days) for activity scoring.
-    ira_experience_lookback_days: int = Field(default=90, ge=7, le=3650)
+    brain_experience_lookback_days: int = Field(default=90, ge=7, le=3650)
     scheduling_default_expiry_days: int = Field(default=7, ge=1, le=90)
     scheduling_default_buffer_minutes: int = Field(default=15, ge=0, le=180)
     scheduling_default_slot_step_minutes: int = Field(default=30, ge=5, le=240)
@@ -1020,7 +1020,7 @@ class AppConfig(BaseSettings):
     #: Run the heavy startup sequence in a background task and accept traffic after logging init.
     startup_defer_to_background: bool = False
 
-    #: When True, ``ira delegate claude-code`` and MCP ``invoke_claude_code`` may spawn the Claude Code CLI.
+    #: When True, ``brain delegate claude-code`` and MCP ``invoke_claude_code`` may spawn the Claude Code CLI.
     claude_code_delegate_enabled: bool = False
     #: Executable basename resolved via PATH (default Anthropic Claude Code CLI).
     claude_code_delegate_command: str = "claude"
@@ -1030,9 +1030,9 @@ class AppConfig(BaseSettings):
     claude_code_delegate_max_prompt_chars: int = Field(default=48_000, ge=500, le=200_000)
     claude_code_delegate_max_output_chars: int = Field(default=400_000, ge=10_000, le=2_000_000)
 
-    #: When True, ``ira git ship commit`` may run ``git add`` + ``git commit`` under allowed roots.
+    #: When True, ``brain git ship commit`` may run ``git add`` + ``git commit`` under allowed roots.
     git_ship_enabled: bool = False
-    #: Separate gate for ``ira git ship push`` (requires ``git_ship_enabled`` as well).
+    #: Separate gate for ``brain git ship push`` (requires ``git_ship_enabled`` as well).
     git_ship_allow_push: bool = False
     #: Comma-separated absolute dirs for git ship cwd (empty = Brain OS repo root only).
     git_ship_allowed_roots: str = ""
@@ -1058,9 +1058,9 @@ class AppConfig(BaseSettings):
     tinder_triangulate_before_draft: bool = True
     #: Include Argus dossier in Tinder triangulation (slower; off by default).
     tinder_triangulate_deep: bool = False
-    #: Refuse ``ira tinder draft`` until ``ira tinder card`` has built company intel.
+    #: Refuse ``brain tinder draft`` until ``brain tinder card`` has built company intel.
     tinder_require_company_card_before_draft: bool = True
-    #: On ``ira tinder status``, build company intel when missing (may take ~60s).
+    #: On ``brain tinder status``, build company intel when missing (may take ~60s).
     tinder_auto_fetch_company_card_on_status: bool = True
     #: Before showing a card, classify domain as industrial forming machinery buyer (website + LLM).
     tinder_icp_gate_enabled: bool = True
@@ -1268,7 +1268,7 @@ class AppConfig(BaseSettings):
     company_similarity_min_score: float = Field(default=0.72, ge=0.0, le=1.0)
     company_similarity_candidate_pool: int = Field(default=500, ge=10, le=5000)
     company_similarity_auto_embed_on_brief: bool = True
-    #: Inject ``strategy_overlays_active.json`` fragments into agent system prompts (see ``IRA_DISABLE_GEPA_OVERLAYS``).
+    #: Inject ``strategy_overlays_active.json`` fragments into agent system prompts (see ``BRAIN_DISABLE_GEPA_OVERLAYS``).
     gepa_strategy_overlay_runtime: bool = False
     #: Dream: compile ``strategy_overlays_candidate.json`` from persisted tool stats + LLM.
     gepa_dream_compile_enabled: bool = False
@@ -1308,32 +1308,32 @@ class Settings(BaseSettings):
 
     #: When ``True``, outbound Gmail policy treats guardrail checker *exceptions* as hard blocks even
     #: for one-off sends. Otherwise, campaign sends (non-empty ``campaign_id``) still fail closed on exceptions.
-    ira_outbound_fail_closed: bool = Field(
+    brain_outbound_fail_closed: bool = Field(
         default=False,
-        validation_alias=AliasChoices("IRA_OUTBOUND_FAIL_CLOSED"),
+        validation_alias=AliasChoices("BRAIN_OUTBOUND_FAIL_CLOSED"),
     )
 
     #: Which specialist agents Pantheon loads. ``off`` = full pantheon; ``standard`` = sales-heavy subset
     #: (default, matches historical behavior); ``strict`` = minimal 10-agent revenue stack (optional).
-    ira_revenue_mode: Literal["off", "standard", "strict"] = Field(
+    brain_revenue_mode: Literal["off", "standard", "strict"] = Field(
         default="standard",
-        validation_alias=AliasChoices("IRA_REVENUE_MODE"),
+        validation_alias=AliasChoices("BRAIN_REVENUE_MODE"),
     )
-    ira_route_provider: str = Field(
+    brain_route_provider: str = Field(
         default="",
-        validation_alias=AliasChoices("IRA_ROUTE_PROVIDER"),
+        validation_alias=AliasChoices("BRAIN_ROUTE_PROVIDER"),
     )
-    ira_synthesis_provider: str = Field(
+    brain_synthesis_provider: str = Field(
         default="",
-        validation_alias=AliasChoices("IRA_SYNTHESIS_PROVIDER"),
+        validation_alias=AliasChoices("BRAIN_SYNTHESIS_PROVIDER"),
     )
-    ira_digestive_provider: str = Field(
+    brain_digestive_provider: str = Field(
         default="",
-        validation_alias=AliasChoices("IRA_DIGESTIVE_PROVIDER"),
+        validation_alias=AliasChoices("BRAIN_DIGESTIVE_PROVIDER"),
     )
-    ira_embedding_provider: str = Field(
+    brain_embedding_provider: str = Field(
         default="",
-        validation_alias=AliasChoices("IRA_EMBEDDING_PROVIDER"),
+        validation_alias=AliasChoices("BRAIN_EMBEDDING_PROVIDER"),
     )
 
     llm: LLMConfig = LLMConfig()

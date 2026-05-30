@@ -1,4 +1,4 @@
-"""Rules-driven :class:`~ira.systems.task_orchestrator.TaskOrchestrator` on bus events."""
+"""Rules-driven :class:`~brain_os.systems.task_orchestrator.TaskOrchestrator` on bus events."""
 
 from __future__ import annotations
 

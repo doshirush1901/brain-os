@@ -35,7 +35,7 @@ ASSESS_SINGLE_AGENT_SKIP = frozenset({"athena", "timeout"})
 
 def should_skip_faithfulness_for_gold_eval(resolved_input: str) -> bool:
     """Offline gold-eval threads ship their own evidence; skip KB faithfulness hard-gates."""
-    return "[IRA_EMAIL_GOLD_EVAL_v1]" in resolved_input
+    return "[BRAIN_EMAIL_GOLD_EVAL_v1]" in resolved_input
 
 
 def faithfulness_gate_eligible(

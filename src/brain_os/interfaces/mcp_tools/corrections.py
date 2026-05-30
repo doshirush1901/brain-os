@@ -61,7 +61,7 @@ async def submit_praise(
     message: str = "well done",
     run_id: str = "",
 ) -> str:
-    """Record operator praise and reinforce the method used for a turn (``ira praise``)."""
+    """Record operator praise and reinforce the method used for a turn (``brain praise``)."""
     import json
 
     try:

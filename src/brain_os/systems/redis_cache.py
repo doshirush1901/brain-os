@@ -25,7 +25,7 @@ from brain_os.config import RedisConfig, get_settings
 
 logger = logging.getLogger(__name__)
 
-_KEY_PREFIX = "ira:"
+_KEY_PREFIX = "brain:"
 
 
 class RedisCache:

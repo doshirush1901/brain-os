@@ -80,9 +80,9 @@ SENSITIVE_PATHS_BLOCKED_WITHOUT_SECRET = frozenset(
 
 def _is_relaxed_http_auth_environment() -> bool:
     """True only on trusted dev shells — missing API secrets stay permitted."""
-    ira_env = os.getenv("IRA_ENV", "").strip().lower()
-    if ira_env:
-        return ira_env in ("development", "dev", "local", "test")
+    brain_env = os.getenv("BRAIN_ENV", "").strip().lower()
+    if brain_env:
+        return brain_env in ("development", "dev", "local", "test")
     return get_settings().app.environment.strip().lower() in ("development", "dev", "local", "test")
 
 
@@ -107,7 +107,7 @@ def log_sensitive_api_policy_if_keyless() -> None:
         return
 
     logger.error(
-        "IRA API: APP__API_SECRET_KEY unset while IRA_ENV / APP__ENVIRONMENT is not "
+        "IRA API: APP__API_SECRET_KEY unset while BRAIN_ENV / APP__ENVIRONMENT is not "
         "development-like — authenticated routes reject anonymous callers."
     )
 
@@ -150,13 +150,13 @@ async def require_api_key(
             return
         logger.warning(
             "IRA API: rejecting request without APP__API_SECRET_KEY "
-            "(configure IRA_ENV=development only on trusted workstations)."
+            "(configure BRAIN_ENV=development only on trusted workstations)."
         )
         raise HTTPException(
             status_code=401,
             detail=(
                 "APP__API_SECRET_KEY must be configured outside development environments "
-                "(set IRA_ENV=development for local open access)."
+                "(set BRAIN_ENV=development for local open access)."
             ),
         )
 

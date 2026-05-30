@@ -60,7 +60,7 @@ _DEFAULT_CHEAP_EXIT_BYPASS_KEYWORDS = (
 # compatible with legacy single-string cache entries (~5 min TTL during
 # rollout). See docs/PHASE2_HARDENING_AUDIT.md §4.2.
 
-_DEDUP_ENVELOPE_VERSION: str = "ira_dedup_v1"
+_DEDUP_ENVELOPE_VERSION: str = "brain_dedup_v1"
 
 
 def _encode_dedup_payload(shaped: str, agents_used: list[str], run_id: str) -> str:

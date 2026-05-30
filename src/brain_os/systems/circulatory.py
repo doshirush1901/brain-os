@@ -1,6 +1,6 @@
 """Circulatory System -- keeps CRM, Neo4j, and Qdrant in sync.
 
-Subscribes to :class:`~ira.systems.data_event_bus.DataEventBus` events
+Subscribes to :class:`~brain_os.systems.data_event_bus.DataEventBus` events
 and propagates changes across stores.  Also maintains a persistent
 change ledger for auditability and replay.
 

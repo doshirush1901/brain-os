@@ -352,12 +352,12 @@ class Prometheus(BaseAgent):
         if not rows:
             hint = (
                 " No rows for this mailbox until emails are ingested from that account "
-                "(ira email rescan --mailbox …) so interactions carry source_mailbox."
+                "(brain email rescan --mailbox …) so interactions carry source_mailbox."
                 if mb
                 else ""
             )
             return (
-                "No Demo-Programme programme deals found in CRM (seed with: ira crm seed-demo-programme)."
+                "No Demo-Programme programme deals found in CRM (seed with: brain crm seed-demo-programme)."
                 + hint
             )
         return json.dumps(rows, default=str)

@@ -62,7 +62,7 @@ _DEAL_INTENTS = frozenset(
 )
 
 _DEAL_SUBJECT_PATTERNS = re.compile(
-    r"(?i)(quote|proposal|offer|PF1|DEMO2|ATF|AM[-\s]|IMG|FCS|"
+    r"(?i)(quote|proposal|offer|DEMO|DEMO2|ATF|AM[-\s]|IMG|FCS|"
     r"thermoform|vacuum\s*form|machine\s+inquiry|pricing|"
     r"techno.?commercial)",
 )
@@ -78,7 +78,7 @@ _DEAL_SUBJECT_NOISE_PATTERNS = re.compile(
 # Quote number / formal quotation filename cues (Prometheus: discussion alone ≠ PROPOSAL).
 _QUOTE_EVIDENCE_SUBJECT_PATTERNS = re.compile(
     r"(?i)(quotation\s*[-–]\s*MCT-|quote\s*[-–]\s*MCT-|MCT-\d{4}-\d+|"
-    r"offer\s+PF1|updated offer|techno[-\s]?commercial|"
+    r"offer\s+DEMO|updated offer|techno[-\s]?commercial|"
     r"\.pdf\b.*quot|quot.*\.pdf)",
 )
 
@@ -135,13 +135,13 @@ _DEFAULT_CRM_DEAL_BLOCKLIST = (
 
 def _require_quote_evidence_for_proposal() -> bool:
     """When true (default), auto-created deals use PROPOSAL only with quote evidence."""
-    raw = (os.environ.get("IRA_CRM_REQUIRE_QUOTE_EVIDENCE_FOR_PROPOSAL") or "true").strip().lower()
+    raw = (os.environ.get("BRAIN_CRM_REQUIRE_QUOTE_EVIDENCE_FOR_PROPOSAL") or "true").strip().lower()
     return raw not in ("0", "false", "no", "off")
 
 
 def _crm_extra_deal_block_domains() -> frozenset[str]:
     """Domains that must never auto-create CRM deals from inbound mail (comma env)."""
-    raw = (os.environ.get("IRA_CRM_DEAL_BLOCKLIST_DOMAINS") or _DEFAULT_CRM_DEAL_BLOCKLIST).strip()
+    raw = (os.environ.get("BRAIN_CRM_DEAL_BLOCKLIST_DOMAINS") or _DEFAULT_CRM_DEAL_BLOCKLIST).strip()
     parts = [p.strip().lower() for p in raw.split(",") if p.strip()]
     return frozenset(parts)
 

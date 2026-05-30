@@ -10,7 +10,7 @@ the Pantheon.  The flow is:
 
 Task state is persisted in Redis so that clarification round-trips can
 span multiple HTTP requests.  Progress events are emitted via an async
-callback (same pattern as :class:`~ira.pipeline.RequestPipeline`).
+callback (same pattern as :class:`~brain_os.pipeline.RequestPipeline`).
 """
 
 from __future__ import annotations

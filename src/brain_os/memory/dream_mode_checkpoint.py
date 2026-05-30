@@ -23,7 +23,7 @@ def load_dream_checkpoint(checkpoint_path: Path) -> dict[str, Any]:
 
 
 def reset_dream_checkpoint(checkpoint_path: Path) -> None:
-    """Remove the prior checkpoint so each ``ira dream`` runs a full cycle."""
+    """Remove the prior checkpoint so each ``brain dream`` runs a full cycle."""
     prior = load_dream_checkpoint(checkpoint_path)
     if prior:
         logger.info(

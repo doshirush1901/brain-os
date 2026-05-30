@@ -73,7 +73,7 @@ def crm_deals(
 ) -> None:
     """Sales deals in a date window: newest-first and highest-value-first lists.
 
-    Uses the same Postgres CRM as ``ira ask`` / Prometheus. Date window is
+    Uses the same Postgres CRM as ``brain ask`` / Prometheus. Date window is
     approximate (``months`` × 30 days). Default: deals **created** in the window,
     **open stages** only, two tables (latest activity first, then by value).
     """
@@ -342,12 +342,12 @@ def crm_mailbox_digest(
     exclude_domains: str = typer.Option(
         "",
         "--exclude-domains",
-        help="Comma-separated domains to skip (e.g. informa.com,stripe.com). Merged with IRA_MAILBOX_DIGEST_EXCLUDE_DOMAINS.",
+        help="Comma-separated domains to skip (e.g. informa.com,stripe.com). Merged with BRAIN_MAILBOX_DIGEST_EXCLUDE_DOMAINS.",
     ),
     exclude_emails: str = typer.Option(
         "",
         "--exclude-emails",
-        help="Comma-separated full addresses to drop (e.g. personal Gmail). Merged with IRA_MAILBOX_DIGEST_EXCLUDE_EMAILS.",
+        help="Comma-separated full addresses to drop (e.g. personal Gmail). Merged with BRAIN_MAILBOX_DIGEST_EXCLUDE_EMAILS.",
     ),
     no_crm: bool = typer.Option(
         False,
@@ -376,11 +376,11 @@ def crm_mailbox_digest(
     widen to 12 or 36 later.
 
     Internal domains default to example.com / example.net in fresh clones — override via
-    env ``IRA_MAILBOX_DIGEST_INTERNAL_DOMAINS`` (comma-separated).
+    env ``BRAIN_MAILBOX_DIGEST_INTERNAL_DOMAINS`` (comma-separated).
 
     CRM columns come from Postgres ``contacts.contact_type`` (customer vs lead
     enums) when the email matches; otherwise ``NOT_IN_CRM``. Use
-    ``IRA_MAILBOX_DIGEST_EXCLUDE_EMAILS`` or ``--exclude-emails`` for addresses
+    ``BRAIN_MAILBOX_DIGEST_EXCLUDE_EMAILS`` or ``--exclude-emails`` for addresses
     that are not sales leads.
     """
     _configure_logging(verbose)
@@ -639,7 +639,7 @@ def crm_screen_thermoforming(
     material signals (ABS, HDPE, PC, PP, PET, PLA, PS, etc.).
     """
     console.print(
-        "[red]Disabled:[/red] `ira crm screen-industrial forming` depended on "
+        "[red]Disabled:[/red] `brain crm screen-industrial forming` depended on "
         "`brain_os.systems.thermoforming_target_screener`, which is not shipped in this repository."
     )
     raise typer.Exit(1)

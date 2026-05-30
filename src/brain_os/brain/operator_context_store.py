@@ -43,7 +43,7 @@ def operator_context_enabled() -> bool:
 
 
 class OperatorContextStore:
-    """SQLite store for :class:`~ira.schemas.operator_context.OperatorContextRun`."""
+    """SQLite store for :class:`~brain_os.schemas.operator_context.OperatorContextRun`."""
 
     def __init__(self, *, db_path: Path | None = None) -> None:
         self._db_path = db_path or operator_context_db_path()

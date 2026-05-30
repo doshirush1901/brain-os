@@ -2,8 +2,8 @@
 
 Detects positive, negative, and ambiguous feedback in user messages,
 tracks per-agent success/failure scores, stores corrections in the
-:class:`~ira.brain.correction_store.CorrectionStore`, and notifies the
-:class:`~ira.systems.learning_hub.LearningHub` to trigger micro-learning.
+:class:`~brain_os.brain.correction_store.CorrectionStore`, and notifies the
+:class:`~brain_os.systems.learning_hub.LearningHub` to trigger micro-learning.
 """
 
 from __future__ import annotations

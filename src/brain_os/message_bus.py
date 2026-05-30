@@ -1,11 +1,11 @@
 """Async pub/sub message bus for inter-agent communication.
 
-Every agent publishes and receives :class:`~ira.data.models.AgentMessage`
+Every agent publishes and receives :class:`~brain_os.data.models.AgentMessage`
 objects through the bus.  Messages can be directed (to a specific agent)
 or broadcast (to all subscribers).  A bounded in-process log of recent
 messages is kept for debugging (``AppConfig.message_bus_log_maxlen``).
 
-When a :class:`~ira.systems.redis_cache.RedisCache` instance is attached
+When a :class:`~brain_os.systems.redis_cache.RedisCache` instance is attached
 via :meth:`set_redis`, every published message is also persisted to a
 Redis Stream (``ira:bus:messages``) for durability and cross-process replay.
 """

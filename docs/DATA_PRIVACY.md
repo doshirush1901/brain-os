@@ -16,7 +16,7 @@ Depending on enabled integrations, Brain OS-class stacks may touch:
 
 1. Store secrets only in `.env`, secret managers, or encrypted vaults — never in tracked files.
 2. Prefer **local** Postgres/Qdrant/Neo4j for customer payloads; isolate networks from the public Internet.
-3. Use **`IRA_EMAIL_MODE=TRAINING`** until governance allows operational sends.
+3. Use **`BRAIN_EMAIL_MODE=TRAINING`** until governance allows operational sends.
 4. Enable optional ingest-time redaction (`APP__REDACT_PII_AT_INGEST`) when experimenting with realistic dumps in dev sandboxes.
 
 ## Synthetic-first workflow for forks

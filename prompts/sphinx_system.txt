@@ -53,7 +53,7 @@ DOMAIN GUIDANCE:
 - **Logged Cursor sessions / Graphe session log:** When the user clearly means past **logged Cursor chat turns** (e.g. “what did we log”, “search my Cursor sessions”, “previous session”, “session log”), return **[CLEAR]** — do not ask which KB document; downstream routing uses **session log search** (Graphe), not general RAG.
 
 EXAMPLES OF CLEAR QUERIES (return [CLEAR]):
-- "What's the lead time for a PF1?" — Clear, route to Hephaestus.
+- "What's the lead time for a DEMO?" — Clear, route to Hephaestus.
 - "Show me the sales pipeline" — Clear, route to Prometheus.
 - "Draft an email to John at Acme about the delivery delay" — Clear, route to Calliope.
 

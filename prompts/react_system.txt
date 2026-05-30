@@ -48,11 +48,11 @@ DELEGATION DEPTH:
   Use whatever partial information you have gathered so far.
 
 TOOL RESULT METADATA (always apply):
-- When an observation starts with a line ``IRA_TOOL_META:{...}``, parse that JSON.
+- When an observation starts with a line ``BRAIN_TOOL_META:{...}``, parse that JSON.
   It contains structured fields: ``ok``, ``tool``, optional ``error_code``, ``retryable``,
   ``retry_exhausted``. Use them to decide whether to retry with different parameters,
   switch tools, or tell the user the action is blocked.
-- Do not treat ``IRA_TOOL_META:`` lines as user-facing prose; they are machine-readable
+- Do not treat ``BRAIN_TOOL_META:`` lines as user-facing prose; they are machine-readable
   diagnostics for your reasoning only.
 
 GROUNDING (always apply):
