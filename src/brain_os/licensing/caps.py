@@ -78,7 +78,7 @@ def _usage_path() -> Path:
         from brain_os.systems.data_dir_lock import get_data_dir
 
         base = get_data_dir()
-    except Exception:
+    except (ImportError, OSError, RuntimeError):
         base = Path("data")
     return Path(base) / "brain" / "license_usage.json"
 

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from mcp.server.fastmcp import FastMCP
-
 from brain_os.licensing.tiers import is_pro
+from mcp.server.fastmcp import FastMCP
 
 
 def register_all_tools(mcp: FastMCP) -> None:

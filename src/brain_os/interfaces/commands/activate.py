@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import json
-
 import typer
-from rich.console import Console
-from rich.table import Table
-
 from brain_os.licensing.activate import activate_trial, activate_with_key, license_status_dict
 from brain_os.licensing.caps import community_document_limit, get_indexed_document_count
 from brain_os.licensing.store import clear_license
-from brain_os.licensing.tiers import effective_tier, tier_label
+from brain_os.licensing.tiers import tier_label
+from rich.console import Console
+from rich.table import Table
 
 console = Console()
 license_app = typer.Typer(help="License activation and status")
@@ -34,7 +31,9 @@ def license_status() -> None:
 
 @license_app.command("clear")
 def license_clear(
-    force: bool = typer.Option(False, "--force", help="Clear Pro/trial license (revert to Community)."),
+    force: bool = typer.Option(
+        False, "--force", help="Clear Pro/trial license (revert to Community)."
+    ),
 ) -> None:
     """Remove local license file (revert to Community tier)."""
     if not force:
@@ -49,8 +48,12 @@ def register_license_commands(app: typer.Typer) -> None:
 
 
 def activate(
-    key: str | None = typer.Option(None, "--key", "-k", help="License key (bos_live_... or bos_trial_...)."),
-    trial: bool = typer.Option(False, "--trial", help="Start a local 14-day Pro trial (no key required)."),
+    key: str | None = typer.Option(
+        None, "--key", "-k", help="License key (bos_live_... or bos_trial_...)."
+    ),
+    trial: bool = typer.Option(
+        False, "--trial", help="Start a local 14-day Pro trial (no key required)."
+    ),
     org_name: str = typer.Option("Trial workspace", "--org", help="Organization label for trial."),
     json_out: bool = typer.Option(False, "--json", help="Print license record as JSON."),
 ) -> None:

@@ -4,8 +4,8 @@ Thanks for helping improve the public skeleton.
 
 ## Where to contribute
 
-- **Engine / export:** Changes land in private **ira-v3** (`scripts/export_brain_os.py`), then republish to this repo.
-- **Docs & Acme demo:** PRs welcome here for `examples/acme/`, `docs/`, and `brain_os_skeleton/` in ira-v3 upstream.
+- **Engine / export:** Changes land in private **ira-v3** (`brain-os/scripts/export_brain_os.py`), then republish to this repo.
+- **Docs & Acme demo:** PRs welcome here for `examples/acme/`, `docs/`, and `brain-os/skeleton/` in ira-v3 upstream.
 
 ## Before you PR
 
@@ -26,7 +26,7 @@ Thanks for helping improve the public skeleton.
 
 ## Design partners
 
-See [docs/BRAIN_OS_GTM.md](docs/BRAIN_OS_GTM.md) for LOI template. Use the **Design partner feedback** issue template.
+Design partners: use the **Design partner feedback** issue template (`.github/ISSUE_TEMPLATE/design_partner.md`).
 
 ## Proprietary operator
 

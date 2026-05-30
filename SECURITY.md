@@ -2,7 +2,7 @@
 
 ## Reporting
 
-Email security concerns to the maintainers listed on the GitHub org profile.  
+Email security concerns to the maintainers listed on the GitHub org profile.
 Do not open public issues for unpatched vulnerabilities.
 
 ## Scope

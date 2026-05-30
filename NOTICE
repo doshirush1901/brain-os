@@ -28,5 +28,4 @@ PostgreSQL, Redis — see `docker-compose.local.yml` and each vendor's license.
 **Trademarks:** Brain OS, Ira, Cursor, Claude, OpenAI, and other names are
 property of their respective owners.
 
-Counsel may require expanding this file before **v1.0.0**; see
-[docs/BRAIN_OS_BSL_COUNSEL_BRIEF.md](docs/BRAIN_OS_BSL_COUNSEL_BRIEF.md).
+Counsel may require expanding this file before **v1.0.0**; see `docs/LICENSING.md` and the BSL parameter stub in `LICENSE`.

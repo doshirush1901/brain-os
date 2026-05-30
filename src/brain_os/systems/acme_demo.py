@@ -92,7 +92,7 @@ def seed_acme_demo(*, force: bool = False, crm: bool = True) -> dict[str, Any]:
                     industry=str(row.get("industry", "")).strip() or None,
                 )
                 companies_by_name[name] = comp
-            except Exception:
+            except (OSError, RuntimeError, ValueError):
                 existing = await db.list_companies({"industry": row.get("industry")})
                 for c in existing:
                     if c.name == name:
@@ -146,7 +146,7 @@ def seed_acme_demo(*, force: bool = False, crm: bool = True) -> dict[str, Any]:
             encoding="utf-8",
         )
         report["actions"].append(f"crm seeded ({deal_count} deals)")
-    except Exception as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         logger.warning("Acme CRM seed skipped: %s", exc)
         report["actions"].append(f"crm skipped: {exc}")
 

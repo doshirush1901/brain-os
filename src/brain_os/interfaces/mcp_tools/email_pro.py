@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from mcp.server.fastmcp import FastMCP
-
 from brain_os.interfaces.mcp_tool_hardening import hardened_mcp_tool
 from brain_os.interfaces.mcp_tools.email import (
     email_touch_audit,
     get_account_mail_journey,
     send_email,
 )
+from mcp.server.fastmcp import FastMCP
 
 
 def register_pro(mcp: FastMCP) -> None:

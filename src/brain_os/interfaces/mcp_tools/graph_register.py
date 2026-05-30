@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from mcp.server.fastmcp import FastMCP
-
 from brain_os.interfaces.mcp_tool_hardening import hardened_mcp_tool
 from brain_os.interfaces.mcp_tools.graph import (
     find_company_contacts,
@@ -13,6 +11,7 @@ from brain_os.interfaces.mcp_tools.graph import (
     get_company_context_graph,
     get_company_icp_profile,
 )
+from mcp.server.fastmcp import FastMCP
 
 
 def register_community(mcp: FastMCP) -> None:

@@ -1,6 +1,6 @@
 # Brain OS — visual identity (public)
 
-Public-safe brand tokens for **brain-os** README and GitHub social preview.  
+Public-safe brand tokens for **brain-os** README and GitHub social preview.
 Voice and operator behavior for your private OEM stack live in **Ira** (`SOUL.md` in ira-v3).
 
 ## Assets (this repo)

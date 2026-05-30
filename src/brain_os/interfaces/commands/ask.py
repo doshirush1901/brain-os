@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 import typer
+from brain_os.interfaces.cli.runtime import _configure_logging, _run
+from brain_os.systems.data_dir_lock import data_dir_lock
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
-
-from brain_os.interfaces.cli.runtime import _configure_logging, _run
-from brain_os.systems.data_dir_lock import data_dir_lock
 
 console = Console()
 err_console = Console(stderr=True)
@@ -57,9 +55,7 @@ def ask(
                     )
                 )
             else:
-                console.print(
-                    Panel(Markdown(response), title="Brain OS", border_style="green")
-                )
+                console.print(Panel(Markdown(response), title="Brain OS", border_style="green"))
 
     try:
         with data_dir_lock():

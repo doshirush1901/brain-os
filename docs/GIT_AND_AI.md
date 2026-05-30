@@ -41,7 +41,7 @@ Private company fork: [FORK_GUIDE.md](FORK_GUIDE.md).
 
 ## Maintainer note
 
-Changes to **engine** code should be exported from ira-v3 (`scripts/export_brain_os.py`), not edited only here — see [CONTRIBUTING.md](../CONTRIBUTING.md).
+Changes to **engine** code should be exported from ira-v3 (`brain-os/scripts/export_brain_os.py`), not edited only here — see [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## Related
 

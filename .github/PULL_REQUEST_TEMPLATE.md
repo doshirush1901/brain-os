@@ -5,8 +5,8 @@ What does this PR change?
 ## Type
 
 - [ ] Docs / examples (Acme-safe only)
-- [ ] Public skeleton fix (also patch `brain_os_skeleton/` in ira-v3 upstream)
-- [ ] Engine change (must land via `export_brain_os.py` in private ira-v3 first)
+- [ ] Public skeleton fix (also patch `brain-os/skeleton/` in ira-v3 upstream)
+- [ ] Engine change (must land via `brain-os/scripts/export_brain_os.py` in private ira-v3 first)
 
 ## Checklist
 

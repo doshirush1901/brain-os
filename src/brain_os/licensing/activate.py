@@ -8,7 +8,6 @@ import re
 from datetime import UTC, datetime, timedelta
 
 import httpx
-
 from brain_os.licensing.store import LicenseRecord, load_license, save_license
 
 logger = logging.getLogger(__name__)

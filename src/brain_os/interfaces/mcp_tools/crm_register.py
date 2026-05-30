@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from mcp.server.fastmcp import FastMCP
-
 from brain_os.interfaces.mcp_tool_hardening import hardened_mcp_tool
 from brain_os.interfaces.mcp_tools.crm import (
     create_contact,
@@ -14,6 +12,7 @@ from brain_os.interfaces.mcp_tools.crm import (
     search_crm,
     update_deal,
 )
+from mcp.server.fastmcp import FastMCP
 
 
 def register_community(mcp: FastMCP) -> None:

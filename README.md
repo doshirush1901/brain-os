@@ -118,7 +118,7 @@ poetry run brain ask "Summarize the Acme demo CRM" --json
 | **Community** | Free fork · 500 doc cap · ~26 MCP tools · draft-only email |
 | **Pro / trial** | `brain activate --trial` (14 days) or license key · full MCP |
 
-[docs/LICENSING.md](docs/LICENSING.md) · [BSL counsel brief](docs/BRAIN_OS_BSL_COUNSEL_BRIEF.md)
+[docs/LICENSING.md](docs/LICENSING.md)
 
 ---
 
@@ -129,7 +129,7 @@ poetry run brain ask "Summarize the Acme demo CRM" --json
 | [Quickstart](docs/QUICKSTART.md) | Clone → bootstrap → first `brain ask` |
 | [Fork guide](docs/FORK_GUIDE.md) | Private fork checklist (7 days → month 1) |
 | [MCP setup](docs/MCP_SETUP.md) | Cursor, Claude Code, Claude Desktop |
-| [Product roadmap](docs/BRAIN_OS_PRODUCTIZATION_ROADMAP.md) | Architecture and GTM |
+| [Triangulation](docs/IRA_TRIANGULATION.md) | Account evidence model |
 | [Brand assets](docs/BRAND.md) | Logo, README hero, social preview |
 | [Changelog](CHANGELOG.md) | Release notes |
 | [Git + AI](docs/GIT_AND_AI.md) | Commits, secrets, CI, maintainer export |

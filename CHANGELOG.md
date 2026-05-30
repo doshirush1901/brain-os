@@ -20,6 +20,6 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Notes
 
-- **License:** BSL 1.1 parameters stub — full text and entity name pending counsel ([docs/BRAIN_OS_BSL_COUNSEL_BRIEF.md](docs/BRAIN_OS_BSL_COUNSEL_BRIEF.md)). Do not tag **v1.0.0** until approved.
+- **License:** BSL 1.1 parameters stub — full text and entity name pending counsel. Do not tag **v1.0.0** until approved.
 
 [0.1.0]: https://github.com/doshirush1901/brain-os/releases/tag/v0.1.0

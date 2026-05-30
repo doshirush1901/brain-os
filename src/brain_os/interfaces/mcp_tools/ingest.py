@@ -5,10 +5,9 @@ from __future__ import annotations
 import json
 import logging
 
-from mcp.server.fastmcp import FastMCP
-
 from brain_os.interfaces.mcp_tool_hardening import hardened_mcp_tool
 from brain_os.licensing.caps import LicenseCapError, assert_ingest_allowed, record_document_ingested
+from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger(__name__)
 
