@@ -15,18 +15,19 @@ git remote add private git@github.com:your-org/acme-brain.git
 ```bash
 cp examples/acme/SOUL.md ./SOUL.md   # or merge into your own soul
 ./scripts/macpro/bootstrap.sh
+poetry run brain activate --trial
+poetry run brain seed-acme
 ```
 
 ## Day 2 — Ingest demo docs
 
+Use MCP `ingest_document` on each file under `examples/acme/docs/` (see [docs/ACME_DEMO_PATH.md](../../docs/ACME_DEMO_PATH.md)).
+
+## Day 3 — CRM + pipeline
+
 ```bash
-poetry run brain ingest examples/acme/docs/   # when ingest CLI lands
-# Until then: copy docs into examples/acme/docs/ (gitignored) and ingest via operator path
+poetry run brain ask "List Acme demo deals by stage and USD value" --json
 ```
-
-## Day 3 — CRM seed
-
-Load `examples/acme/crm_seed.json` into Postgres (manual or seed command when wired).
 
 ## Day 4 — Cursor MCP
 
@@ -34,7 +35,7 @@ Copy `.mcp.json.example` → `.cursor/mcp.json`, set `cwd` to this repo.
 
 ## Day 5 — First brief
 
-Ask: *Brief me on Northwind Components — CRM, mail, KB; gaps only.*
+Ask: *Brief me on Northwind Components — CRM, knowledge base, gaps only. Contact: jordan.lee@northwind-demo.example*
 
 ## Day 6 — Custom agent
 
@@ -42,4 +43,4 @@ Copy `src/brain_os/agents/_template_agent.py` → `compliance.py`, register in `
 
 ## Day 7 — Operator dry run
 
-Draft-only email to a synthetic contact; approve via operator inbox when wired.
+Draft-only email to a synthetic contact; approve via operator inbox when on Pro trial.

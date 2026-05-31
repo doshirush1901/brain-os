@@ -125,8 +125,11 @@ def seed_acme_demo(*, force: bool = False, crm: bool = True) -> dict[str, Any]:
                     break
             if contact is None:
                 continue
-            stage_raw = str(row.get("stage", "proposal")).strip().upper()
-            stage = DealStage.PROPOSAL if stage_raw == "PROPOSAL" else DealStage.ENGAGED
+            stage_raw = str(row.get("stage", "proposal")).strip().upper().replace("-", "_")
+            try:
+                stage = DealStage(stage_raw)
+            except ValueError:
+                stage = DealStage.ENGAGED
             value = row.get("value_usd")
             await db.create_deal(
                 contact_id=contact.id,

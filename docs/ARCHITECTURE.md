@@ -43,4 +43,4 @@ Cursor / Claude MCP          CLI (brain ask)
 
 ## Related
 
-- [QUICKSTART.md](QUICKSTART.md) · [MCP_SETUP.md](MCP_SETUP.md) · [TRIANGULATION.md](TRIANGULATION.md)
+- [QUICKSTART.md](QUICKSTART.md) · [ACME_DEMO_PATH.md](ACME_DEMO_PATH.md) · [MCP_SETUP.md](MCP_SETUP.md) · [TRIANGULATION.md](TRIANGULATION.md)

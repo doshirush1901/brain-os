@@ -30,6 +30,7 @@ from brain_os.config import DocumentAIConfig, GoogleConfig, get_settings
 logger = logging.getLogger(__name__)
 
 _SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
+_TOKEN_DIR = Path(".credentials")
 _TOKEN_FILE = "token_document_ai.json"
 
 
@@ -102,7 +103,7 @@ class DocumentAIService:
         }
         self._request_timeout = float(cfg.request_timeout_seconds)
         self._creds_path = Path(gcfg.credentials_path)
-        self._token_path = Path(_TOKEN_FILE)
+        self._token_path = _TOKEN_DIR / _TOKEN_FILE
         self._creds: Credentials | None = None
 
     @property

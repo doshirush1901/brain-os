@@ -12,6 +12,30 @@
       "domain": "summit-demo.example",
       "industry": "3PL",
       "stage": "lead"
+    },
+    {
+      "name": "Harbor Packaging Co.",
+      "domain": "harbor-demo.example",
+      "industry": "Packaging",
+      "stage": "engaged"
+    },
+    {
+      "name": "Redwood Medical Devices",
+      "domain": "redwood-demo.example",
+      "industry": "Medical devices",
+      "stage": "proposal"
+    },
+    {
+      "name": "Lakeview Automotive Parts",
+      "domain": "lakeview-demo.example",
+      "industry": "Automotive tier-2",
+      "stage": "negotiation"
+    },
+    {
+      "name": "Continental Tooling GmbH",
+      "domain": "continental-demo.example",
+      "industry": "Precision tooling",
+      "stage": "contacted"
     }
   ],
   "contacts": [
@@ -26,6 +50,30 @@
       "email": "sam.ortiz@summit-demo.example",
       "company": "Summit Logistics",
       "title": "Director IT"
+    },
+    {
+      "name": "Priya Nair",
+      "email": "priya.nair@harbor-demo.example",
+      "company": "Harbor Packaging Co.",
+      "title": "COO"
+    },
+    {
+      "name": "Alex Chen",
+      "email": "alex.chen@redwood-demo.example",
+      "company": "Redwood Medical Devices",
+      "title": "Head of Quality"
+    },
+    {
+      "name": "Morgan Blake",
+      "email": "morgan.blake@lakeview-demo.example",
+      "company": "Lakeview Automotive Parts",
+      "title": "Plant Manager"
+    },
+    {
+      "name": "Elena Vogel",
+      "email": "elena.vogel@continental-demo.example",
+      "company": "Continental Tooling GmbH",
+      "title": "Managing Director"
     }
   ],
   "deals": [
@@ -34,7 +82,56 @@
       "company": "Northwind Components",
       "stage": "proposal",
       "value_usd": 85000,
-      "next_step": "Send SOW draft for review"
+      "next_step": "Send SOW draft after security review 2026-06-02"
+    },
+    {
+      "title": "Summit — Bridge connector POC",
+      "company": "Summit Logistics",
+      "stage": "engaged",
+      "value_usd": 32000,
+      "next_step": "Schedule technical discovery call"
+    },
+    {
+      "title": "Harbor — Pulse line dashboards",
+      "company": "Harbor Packaging Co.",
+      "stage": "qualified",
+      "value_usd": 54000,
+      "next_step": "Share reference architecture diagram"
+    },
+    {
+      "title": "Redwood — Relay notifications (FDA-aware)",
+      "company": "Redwood Medical Devices",
+      "stage": "proposal",
+      "value_usd": 120000,
+      "next_step": "Legal review of notification templates"
+    },
+    {
+      "title": "Lakeview — multi-plant rollout",
+      "company": "Lakeview Automotive Parts",
+      "stage": "negotiation",
+      "value_usd": 210000,
+      "next_step": "Finalize commercial terms; exec sign-off"
+    },
+    {
+      "title": "Continental — DACH pilot",
+      "company": "Continental Tooling GmbH",
+      "stage": "contacted",
+      "value_usd": 45000,
+      "next_step": "Intro call in English; send product overview PDF"
+    },
+    {
+      "title": "Northwind — Plant 2 add-on",
+      "company": "Northwind Components",
+      "stage": "engaged",
+      "value_usd": 28000,
+      "next_step": "Scope read-only ERP connector for 90 days"
+    },
+    {
+      "title": "Summit — annual support renewal",
+      "company": "Summit Logistics",
+      "stage": "won",
+      "value_usd": 18000,
+      "next_step": "Invoice per demo process (synthetic)"
     }
   ]
 }

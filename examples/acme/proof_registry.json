@@ -15,6 +15,48 @@
         "notes": "Synthetic — not a real customer reference."
       },
       "summary": "Placeholder for Calliope-style draft citation tests."
+    },
+    {
+      "id": "acme-pulse-product-page",
+      "title": "Acme Pulse — product overview",
+      "url": "https://example.com/acme/pulse",
+      "tags": ["demo", "product", "Pulse"],
+      "allowed_claims": [
+        "Acme Pulse provides real-time production dashboards for mid-market manufacturers (demo site)."
+      ],
+      "sensitivity": {
+        "customer_name_public_ok": true,
+        "notes": "Synthetic marketing URL."
+      },
+      "summary": "Use when drafts mention Pulse module capabilities."
+    },
+    {
+      "id": "acme-security-whitepaper",
+      "title": "Acme — security & deployment whitepaper",
+      "url": "https://example.com/acme/security-whitepaper",
+      "tags": ["demo", "security", "on-prem"],
+      "allowed_claims": [
+        "Acme supports on-prem Mac deployment and documents security questionnaire responses (demo)."
+      ],
+      "sensitivity": {
+        "customer_name_public_ok": true,
+        "notes": "Synthetic — for enterprise security threads."
+      },
+      "summary": "Cite for Northwind-style security review conversations."
+    },
+    {
+      "id": "acme-bridge-integrations",
+      "title": "Acme Bridge — ERP/WMS integrations",
+      "url": "https://example.com/acme/bridge",
+      "tags": ["demo", "integrations", "Bridge"],
+      "allowed_claims": [
+        "Acme Bridge offers read-only ERP/WMS connector patterns in phase 1 (demo)."
+      ],
+      "sensitivity": {
+        "customer_name_public_ok": true,
+        "notes": "Synthetic."
+      },
+      "summary": "Use for logistics and packaging prospects (Summit, Harbor)."
     }
   ]
 }

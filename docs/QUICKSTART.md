@@ -48,6 +48,10 @@ poetry run brain seed-acme
 poetry run brain ask "Summarize the Acme demo CRM pipeline" --json
 ```
 
+## 5b. Acme “wow path” (recommended)
+
+Load demo docs into Qdrant and run an account brief on **Northwind Components**. Step-by-step: [ACME_DEMO_PATH.md](ACME_DEMO_PATH.md).
+
 ## 6. Cursor MCP (optional)
 
 ```bash
@@ -64,6 +68,7 @@ Enable **brain-os** in Cursor **Settings → MCP**. Full guide: [MCP_SETUP.md](M
 | Private company fork | [FORK_GUIDE.md](FORK_GUIDE.md) |
 | Licensing / Pro | [LICENSING.md](LICENSING.md) |
 | Acme operator story | [examples/acme/journey.md](../examples/acme/journey.md) |
+| Acme wow path | [ACME_DEMO_PATH.md](ACME_DEMO_PATH.md) |
 | Triangulation | [TRIANGULATION.md](TRIANGULATION.md) |
 
 ## Troubleshooting

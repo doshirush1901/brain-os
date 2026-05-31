@@ -39,8 +39,8 @@ poetry run brain health
 ## Day 3 — Your documents and CRM
 
 ```bash
-poetry run brain ingest ./your-docs/    # when ingest CLI is wired in your fork
-poetry run brain seed-acme              # optional: keep Acme for tests
+poetry run brain seed-acme              # optional: keep Acme for regression tests
+# Ingest your docs via MCP ingest_document (see docs/ACME_DEMO_PATH.md for the demo pack)
 # Replace examples/acme/ or add your_company/ with synthetic-safe seeds first
 ```
 

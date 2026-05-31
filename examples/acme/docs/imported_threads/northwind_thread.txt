@@ -1,0 +1,28 @@
+PUBLIC DEMO DATA — fully synthetic mailbox import for KB ingest tests.
+
+Thread-Id: demo-northwind-001
+Subject: Re: Acme Platform — pilot scope for Plant 2
+Participants: jordan.lee@northwind-demo.example, operator@example.com
+
+--- 2026-05-12 ---
+From: Jordan Lee <jordan.lee@northwind-demo.example>
+To: operator@example.com
+
+Thanks for the overview call. We can commit to a Plant 2 pilot if:
+1) Pulse dashboards are read-only against our ERP for 90 days
+2) Security questionnaire is answered before install week
+
+Please send a one-page SOW outline — no pricing in email; we'll review in procurement portal.
+
+--- 2026-05-14 ---
+From: operator@example.com
+To: jordan.lee@northwind-demo.example
+
+Attached (internal): draft SOW outline references Acme case study on example.com only.
+Next: on-site working session optional after security sign-off.
+
+--- 2026-05-18 ---
+From: Jordan Lee <jordan.lee@northwind-demo.example>
+To: operator@example.com
+
+Security review scheduled 2026-06-02. If green, we want install week before month-end.

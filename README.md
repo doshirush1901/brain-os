@@ -90,6 +90,8 @@ poetry run brain seed-acme
 poetry run brain ask "Summarize the Acme demo CRM" --json
 ```
 
+**Acme wow path** (ingest demo docs + account brief on Northwind): [docs/ACME_DEMO_PATH.md](docs/ACME_DEMO_PATH.md)
+
 | Step | Command |
 |:-----|:--------|
 | MCP in Cursor | `cp .cursor/mcp.json.example .cursor/mcp.json` then enable in **Settings → MCP** |
@@ -125,6 +127,7 @@ poetry run brain ask "Summarize the Acme demo CRM" --json
 | Doc | Description |
 |:----|:------------|
 | [Quickstart](docs/QUICKSTART.md) | Clone → bootstrap → first `brain ask` |
+| [Acme demo path](docs/ACME_DEMO_PATH.md) | Ingest pack + Northwind account brief |
 | [Fork guide](docs/FORK_GUIDE.md) | Private fork checklist (7 days → month 1) |
 | [MCP setup](docs/MCP_SETUP.md) | Cursor, Claude Code, Claude Desktop |
 | [Triangulation](docs/TRIANGULATION.md) | Account evidence model |

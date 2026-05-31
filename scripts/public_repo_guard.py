@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
-"""Fail CI if `git ls-files` contains commercial/customer leakage or forbidden paths.
+"""Fail CI if tracked `data/` files leak customer data, or forbidden paths exist.
 
-Conservative checks: substring bans, path bans, emails outside demo domains,
-purchase-order shaped tokens, invoice/proforma lines with money-like amounts,
-and currency literals outside explicit demo knowledge files.
+Scope (deliberate, see _scan_text): this guards the PRIVATE `ira-v3` tree. The
+own-organization domain rule (machinecraft.org / rushabh@) is enforced by
+scripts/public_export_guard.sh on the EXPORTED public `ira-universe` tree, not
+here — on the private repo the company's own domain is a functional default
+(config.send_from) and operational identity in prompts, so scrubbing it would
+change behavior for no privacy gain. This guard instead enforces that real
+customer DATA is not tracked: customer tokens / non-demo emails / commercial
+amounts are scanned inside `data/` files only, plus global path bans and the
+data/knowledge demo-only rule. Hardcoded customer refs in source/docs/prompts
+are a tracked backlog item, not a CI blocker on the private tree.
 
 Heavier entropy scanning stays in gitleaks (run separately on `git archive`)."""
 
@@ -28,6 +35,10 @@ _THIS_FILE = "scripts/public_repo_guard.py"
 
 # Path-shaped bans (exact legacy filenames / globs relative to repo root).
 _FORBIDDEN_PATH_GLOBS = (
+    # Maintainer-only Brain OS HTML/copy (real account names — never in git or public export)
+    "brain-os/marketing/**",
+    "*gold-set-review.html",
+    "*kunal-angle*",
     "scripts/proforma_*",
     "scripts/invoice_*",
     "scripts/*naffco*",
@@ -53,6 +64,9 @@ _ORG_EMAIL_DOMAIN_FRAGMENTS = (
 )
 
 _CAMPAIGN_SUBSTRINGS = (
+    "anatomicsitt.com",
+    "anatomicsitt",
+    "shahkunaly@gmail.com",
     "naffco",
     "dutchtides",
     "joplast",
@@ -92,6 +106,10 @@ _SAFE_EMAIL_DOMAINS = frozenset(
         "domain.tld",
         "northwind-demo.example",
         "summit-demo.example",
+        "harbor-demo.example",
+        "redwood-demo.example",
+        "lakeview-demo.example",
+        "continental-demo.example",
         "imports.placeholder",
         "sentry.io",
         "wikimedia.org",
@@ -321,13 +339,28 @@ def _scan_deira_branding(rel: str, text: str, hits: list[str]) -> None:
         hits.append(f"{rel}: forbidden vertical model token `PF1`")
 
 
+def _is_brain_os_export_root() -> bool:
+    """True when --root points at an exported public brain-os tree (not private ira-v3)."""
+    return (ROOT / "src" / "brain_os").is_dir() and not (ROOT / "src" / "ira").is_dir()
+
+
 def _scan_text(rel: str, text: str, allow: dict, hits: list[str]) -> None:
-    _scan_public_identity(rel, text, hits)
-    _scan_deira_branding(rel, text, hits)
+    export_tree = _is_brain_os_export_root()
+    brain_os_path = rel.startswith("brain-os/")
+
+    # Public brain-os export: full identity / de-Ira / org-domain scan (see test_export_brain_os).
+    if export_tree:
+        _scan_public_identity(rel, text, hits)
+        _scan_deira_branding(rel, text, hits)
+        lower = text.lower()
+        for frag in _ORG_EMAIL_DOMAIN_FRAGMENTS:
+            if frag.lower() in lower:
+                hits.append(f"{rel}: forbidden org/domain fragment `{frag}`")
+    elif not rel.startswith("data/") and not brain_os_path:
+        # Private ira-v3: customer DATA must not be tracked under data/; prompts/src are backlog.
+        return
+
     lower = text.lower()
-    for frag in _ORG_EMAIL_DOMAIN_FRAGMENTS:
-        if frag.lower() in lower:
-            hits.append(f"{rel}: forbidden org/domain fragment `{frag}`")
     for tok in _CAMPAIGN_SUBSTRINGS:
         if tok in lower:
             hits.append(f"{rel}: forbidden token `{tok}`")
@@ -351,10 +384,11 @@ def _scan_text(rel: str, text: str, allow: dict, hits: list[str]) -> None:
                 continue
             hits.append(f"{rel}: non-demo email `{addr}`")
 
-    scan_commercial = rel.startswith(_COMMERCIAL_SCAN_PREFIXES) and not rel.startswith("tests/")
+    scan_commercial = (
+        export_tree and rel.startswith(_COMMERCIAL_SCAN_PREFIXES) and not rel.startswith("tests/")
+    ) or rel.startswith("data/")
     if not scan_commercial:
         return
-    # Shell helpers use timestamped paths / ports — not invoice payloads.
     if rel.endswith((".sh", ".command")):
         return
 

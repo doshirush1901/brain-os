@@ -196,7 +196,7 @@ async def _google_check_grounding(
         from google.auth.transport.requests import Request
         from google.oauth2.credentials import Credentials
 
-        token_path = Path("token_dlp.json")
+        token_path = Path(".credentials") / "token_dlp.json"
         if not token_path.exists():
             return None
 
