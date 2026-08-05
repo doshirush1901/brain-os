@@ -56,16 +56,21 @@ class TaskResult:
     """Value object returned when a task completes (or pauses for clarification)."""
 
     task_id: str
-    status: str  # "complete", "clarification_needed", "aborted", "error"
+    status: str  # "complete", "clarification_needed", "aborted", "error", "dormant"
     summary: str = ""
     file_path: str = ""
     file_format: str = ""
     clarification_questions: list[str] = field(default_factory=list)
     workspace_dir: str = ""
+    continuation_phases_added: int = 0
+    standing_goal_status: str | None = None
+    standing_goal_verdict: str | None = None
+    standing_goal_turn: int | None = None
+    standing_goal_max_turns: int | None = None
 
 
-class TaskOrchestrator:
-    """Server-side orchestrator for multi-phase agent tasks."""
+class _TaskOrchestratorCore:
+    """Core plan-execute-report loop (composed with long-lived mixin as TaskOrchestrator)."""
 
     def __init__(
         self,
@@ -129,8 +134,20 @@ class TaskOrchestrator:
         """Return the persisted task state from Redis."""
         return await self._load_state(task_id)
 
-    async def list_tasks(self, limit: int = 20) -> list[dict[str, Any]]:
+    async def list_tasks(
+        self,
+        limit: int = 20,
+        *,
+        status_filter: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Return recent task states, newest first."""
+        from brain_os.systems import task_workspace_persist as twp
+
+        seen: dict[str, dict[str, Any]] = {}
+        for row in twp.list_workspace_summaries(self._tasks_root, limit=limit * 3):
+            tid = str(row.get("task_id") or "")
+            if tid:
+                seen[tid] = row
         task_ids: list[str] = []
         if self._redis is not None and self._redis.available:
             task_ids = await self._redis.get_json(_TASK_INDEX_KEY) or []
@@ -138,12 +155,26 @@ class TaskOrchestrator:
             task_ids = list(self._local_index)
         if not isinstance(task_ids, list):
             task_ids = []
-        states: list[dict[str, Any]] = []
-        for task_id in task_ids[-limit:][::-1]:
-            state = await self._load_state(str(task_id))
+        for task_id in reversed(task_ids):
+            tid = str(task_id)
+            state = await self._load_state(tid)
             if state:
-                states.append(state)
-        return states
+                seen[tid] = twp.state_to_summary(state)
+        rows = list(seen.values())
+        if status_filter:
+            rows = [r for r in rows if str(r.get("status") or "") == status_filter]
+        rank: dict[str, int] = {str(tid): idx for idx, tid in enumerate(reversed(task_ids)) if tid}
+        rows.sort(
+            key=lambda row: (
+                str(row.get("updated_at") or ""),
+                rank.get(str(row.get("task_id") or ""), 9999),
+            ),
+            reverse=True,
+        )
+        # When ``updated_at`` is missing, lower redis rank index = more recent.
+        if rows and not any(row.get("updated_at") for row in rows):
+            rows.sort(key=lambda row: rank.get(str(row.get("task_id") or ""), 9999))
+        return rows[:limit]
 
     async def append_task_event(self, task_id: str, event: dict[str, Any]) -> None:
         """Append an event to a task's event log."""
@@ -202,27 +233,72 @@ class TaskOrchestrator:
         try:
             await self._emit(on_progress, "task_created", task_id=task_id)
 
-            # 1. Clarity check
-            clarity = await self._check_clarity(state["goal"], on_progress)
-            if not clarity.clear:
-                state["status"] = "awaiting_clarification"
-                state["clarification_questions"] = clarity.clarifying_questions
-                state["clarification_missing_slots"] = list(clarity.missing_slots)
-                await self._save_state(task_id, state)
-                await self._emit(
-                    on_progress,
-                    "clarification_needed",
-                    questions=clarity.clarifying_questions,
-                    reason=clarity.ambiguity_reason,
-                    missing_slots=clarity.missing_slots,
-                    task_id=task_id,
-                )
-                self._workspace_note_clarification_needed(state)
-                return TaskResult(
-                    task_id=task_id,
-                    status="clarification_needed",
-                    clarification_questions=clarity.clarifying_questions,
-                    workspace_dir=ws0,
+            # 1. Clarity check — skip for long-lived / --until tasks (standing
+            # objective is already the verifiable done gate; Sphinx pausing
+            # overnight research for "what does aging mean?" wastes the night).
+            skip_clarity = bool(state.get("long_lived")) or bool(
+                str(state.get("standing_objective") or "").strip()
+            )
+            if not skip_clarity:
+                clarity = await self._check_clarity(state["goal"], on_progress)
+                if not clarity.clear:
+                    state["status"] = "awaiting_clarification"
+                    state["clarification_questions"] = clarity.clarifying_questions
+                    state["clarification_missing_slots"] = list(clarity.missing_slots)
+                    from datetime import UTC, datetime
+
+                    state["socratic_created_at"] = (
+                        datetime.now(UTC).isoformat().replace("+00:00", "Z")
+                    )
+                    state["session_id"] = task_id
+                    state["conversation_id"] = task_id
+                    defaults_raw = (clarity.suggested_default_scope or "").strip()
+                    if defaults_raw.startswith("{"):
+                        try:
+                            import json as _json
+
+                            bundle = _json.loads(defaults_raw)
+                            if isinstance(bundle, dict) and "defaults" in bundle:
+                                state["socratic_defaults"] = bundle.get("defaults") or {}
+                                state["socratic_questions"] = bundle.get("questions") or []
+                                state["socratic_score"] = bundle.get("score") or {}
+                                if bundle.get("gate_id"):
+                                    state["gate_id"] = bundle.get("gate_id")
+                            else:
+                                state["socratic_defaults"] = (
+                                    bundle if isinstance(bundle, dict) else {}
+                                )
+                            state["socratic"] = True
+                        except Exception:
+                            state["socratic_defaults"] = {}
+                    from brain_os.services.socratic_gate import extract_gate_id
+
+                    joined_q = "\n".join(str(q) for q in (clarity.clarifying_questions or []))
+                    gid = extract_gate_id(joined_q)
+                    if gid:
+                        state["gate_id"] = gid
+                    await self._save_state(task_id, state)
+                    await self._emit(
+                        on_progress,
+                        "clarification_needed",
+                        questions=clarity.clarifying_questions,
+                        reason=clarity.ambiguity_reason,
+                        missing_slots=clarity.missing_slots,
+                        task_id=task_id,
+                        socratic=bool(state.get("socratic")),
+                        socratic_defaults=state.get("socratic_defaults") or {},
+                    )
+                    self._workspace_note_clarification_needed(state)
+                    return TaskResult(
+                        task_id=task_id,
+                        status="clarification_needed",
+                        clarification_questions=clarity.clarifying_questions,
+                        workspace_dir=ws0,
+                    )
+            else:
+                logger.info(
+                    "Skipping Sphinx clarity check — long-lived/standing-objective task %s",
+                    task_id,
                 )
 
             # 2. Plan
@@ -279,7 +355,67 @@ class TaskOrchestrator:
             )
 
         original_goal = state["goal"]
-        state["goal"] = f"{original_goal}\n\nClarification: {answer}"
+        clarified = (answer or "").strip()
+        if state.get("socratic"):
+            try:
+                from brain_os.services.socratic_gate import (
+                    classify_socratic_resume,
+                    expand_go_answer,
+                    log_socratic_gate_event,
+                    record_socratic_resume_answers,
+                )
+
+                pending_socratic = {
+                    "socratic": True,
+                    "socratic_defaults": state.get("socratic_defaults") or {},
+                    "socratic_questions": state.get("socratic_questions") or [],
+                    "socratic_score": state.get("socratic_score") or {},
+                    "created_at": state.get("socratic_created_at")
+                    or state.get("created_at")
+                    or state.get("updated_at"),
+                    "session_id": str(state.get("session_id") or task_id),
+                    "conversation_id": str(state.get("conversation_id") or task_id),
+                }
+                match = await classify_socratic_resume(
+                    clarified,
+                    pending_socratic,
+                    llm_client=None,
+                    session_id=str(task_id),
+                    conversation_id=str(task_id),
+                )
+                if match.disposition in ("abandoned", "expired"):
+                    log_socratic_gate_event(
+                        {
+                            "status": match.disposition,
+                            "reason": match.reason,
+                            "source": "task",
+                            "task_id": task_id,
+                            "inbound": clarified[:500],
+                        }
+                    )
+                    return TaskResult(
+                        task_id=task_id,
+                        status="error",
+                        summary=(
+                            f"Pending Socratic gate {match.disposition} ({match.reason}). "
+                            "Start a new task for the new request; answers were not recorded."
+                        ),
+                        workspace_dir=self._workspace_dir_from_state(state),
+                    )
+                clarified = expand_go_answer(
+                    clarified,
+                    defaults=pending_socratic["socratic_defaults"],
+                    questions=pending_socratic["socratic_questions"],
+                )
+                record_socratic_resume_answers(
+                    pending=pending_socratic,
+                    answer=answer,
+                    source="task",
+                    mapped_answers=match.mapped_answers or None,
+                )
+            except Exception:
+                logger.debug("task socratic resume expand failed", exc_info=True)
+        state["goal"] = f"{original_goal}\n\nClarification: {clarified}"
         state["status"] = "resumed"
         await self._save_state(task_id, state)
         self._workspace_resume_note(state)
@@ -438,7 +574,7 @@ class TaskOrchestrator:
             except OSError:
                 logger.warning("Could not write PLAN.md for task %s", task_id, exc_info=True)
 
-        total_phases = len(plan.phases)
+        len(plan.phases)
         await self._emit(
             on_progress,
             "plan_created",
@@ -622,8 +758,59 @@ class TaskOrchestrator:
         goal: str,
         on_progress: ProgressCallback | None,
     ) -> ClarityAssessment:
-        """Ask Sphinx for a structured clarity assessment."""
+        """Ask Sphinx for a structured clarity assessment.
+
+        Prefers Sphinx v2 Socratic gate (stakes × ambiguity + defaults) and
+        falls back to legacy ``assess_clarity`` when Socratic pass-through.
+        """
+        from brain_os.services.task_phase_deterministic import goal_is_structured_multiphase
+
+        if goal_is_structured_multiphase(goal):
+            logger.info("Skipping Sphinx clarity check — structured multi-phase goal")
+            return ClarityAssessment(
+                clear=True,
+                ambiguity_reason="",
+                clarifying_questions=[],
+                missing_slots=[],
+                confidence=0.95,
+                can_answer_partially=False,
+            )
+
         await self._emit(on_progress, "clarity_checking")
+
+        try:
+            from brain_os.config import get_settings
+            from brain_os.services.socratic_gate import (
+                evaluate_socratic_gate,
+                to_clarity_assessment,
+            )
+
+            if get_settings().app.socratic_gate_enabled:
+                llm = None
+                sphinx = self._pantheon.get_agent("sphinx")
+                if sphinx is not None:
+                    try:
+                        await sphinx._ensure_llm()
+                        llm = getattr(sphinx, "_llm", None)
+                    except Exception:
+                        llm = None
+                socratic = await asyncio.wait_for(
+                    evaluate_socratic_gate(
+                        goal,
+                        llm_client=llm,
+                        channel="task",
+                        is_multiphase_task=True,
+                    ),
+                    timeout=_PHASE_TIMEOUT,
+                )
+                if socratic.gated:
+                    return to_clarity_assessment(socratic)
+                # Not gated: fall through to legacy Sphinx assess_clarity for
+                # task safety (mocks + thin goals still get a second opinion).
+        except TimeoutError:
+            logger.warning("Socratic clarity check timed out — falling back to Sphinx")
+        except Exception:
+            logger.debug("Socratic clarity check failed — falling back", exc_info=True)
 
         sphinx = self._pantheon.get_agent("sphinx")
         if sphinx is None:
@@ -757,7 +944,28 @@ class TaskOrchestrator:
                 phase_index=phase_index,
                 verdict=validation_result_to_dict(verdict),
             )
+        self._record_task_phase_validator_metrics(
+            passed=verdict.passed,
+            contract_payload=contract_payload,
+            phase_index=phase_index,
+        )
         return verdict.passed, verdict.summary or ""
+
+    @staticmethod
+    def _record_task_phase_validator_metrics(
+        *,
+        passed: bool,
+        contract_payload: dict[str, Any],
+        phase_index: int,
+    ) -> None:
+        from brain_os.brain import runtime_metrics
+
+        raw_map = contract_payload.get("phase_assertion_map") or {}
+        assertion_ids = raw_map.get(str(phase_index + 1)) or raw_map.get(phase_index + 1) or []
+        total = len(assertion_ids) if assertion_ids else 1
+        runtime_metrics.incr("assertions_total", total)
+        if passed:
+            runtime_metrics.incr("assertions_passed", total)
 
     async def _execute_phase_with_validation(
         self,
@@ -893,8 +1101,42 @@ class TaskOrchestrator:
             )
             return result
 
-        agent = self._pantheon.get_agent(phase.agent)
-        if agent is None:
+        result: str | None = None
+        try:
+            from brain_os.services.task_phase_deterministic import (
+                run_hex_brief_phase,
+                run_mail_journey_phase,
+                run_outbound_draft_phase,
+            )
+
+            result = await run_mail_journey_phase(
+                goal=goal,
+                phase=phase,
+                context_from_previous=context_from_previous,
+                pantheon=self._pantheon,
+            )
+            if result is None:
+                result = await run_hex_brief_phase(
+                    goal=goal,
+                    phase=phase,
+                    context_from_previous=context_from_previous,
+                    pantheon=self._pantheon,
+                )
+            if result is None:
+                result = await run_outbound_draft_phase(
+                    goal=goal,
+                    phase=phase,
+                    context_from_previous=context_from_previous,
+                    pantheon=self._pantheon,
+                )
+        except Exception as exc:
+            logger.warning("Deterministic task phase handler failed: %s", exc)
+
+        agent_key = str(phase.agent or "").strip().lower()
+        agent = self._pantheon.get_agent(agent_key) if agent_key else None
+        if result is not None:
+            pass
+        elif agent is None:
             result = f"(Agent '{phase.agent}' not found — skipped)"
             logger.warning("Phase %d: agent '%s' not found", phase_id, phase.agent)
         else:
@@ -1086,6 +1328,14 @@ class TaskOrchestrator:
 
     async def _save_state(self, task_id: str, state: dict[str, Any]) -> None:
         self._local_state[task_id] = dict(state)
+        ws_dir = str(state.get("workspace_dir") or "").strip()
+        if ws_dir:
+            try:
+                from brain_os.systems.task_workspace_persist import write_state_json
+
+                write_state_json(Path(ws_dir), state)
+            except (OSError, ValueError) as exc:
+                logger.warning("Task %s state.json write failed: %s", task_id, exc)
         if self._redis is not None and self._redis.available:
             await self._redis.set_json(f"task:{task_id}", state, _TASK_TTL_SECONDS)
 
@@ -1096,7 +1346,17 @@ class TaskOrchestrator:
                 self._local_state[task_id] = dict(state)
                 return state
         local = self._local_state.get(task_id)
-        return dict(local) if isinstance(local, dict) else None
+        if isinstance(local, dict):
+            return dict(local)
+        ws = self._tasks_root / task_id
+        if ws.is_dir():
+            from brain_os.systems.task_workspace_persist import read_state_json
+
+            disk = read_state_json(ws)
+            if isinstance(disk, dict):
+                self._local_state[task_id] = dict(disk)
+                return dict(disk)
+        return None
 
     async def _update_task_index(self, task_id: str) -> None:
         local_index = [i for i in self._local_index if i != task_id]
@@ -1123,3 +1383,12 @@ class TaskOrchestrator:
     ) -> None:
         if callback is not None:
             await callback({"type": event_type, **payload})
+
+
+from brain_os.systems.task_orchestrator_long_lived import (  # noqa: E402
+    LongLivedTaskOrchestratorMixin,
+)
+
+
+class TaskOrchestrator(LongLivedTaskOrchestratorMixin, _TaskOrchestratorCore):
+    """Public orchestrator: long-lived waves + base clarity/plan/execute."""

@@ -12,6 +12,7 @@ from typing import Any
 from sqlalchemy.exc import SQLAlchemyError
 
 from brain_os.config import get_settings
+from brain_os.contracts.draft_sender import DraftSender
 from brain_os.data.quotes import QuoteStatus
 from brain_os.schemas.operator_inbox import (
     OperatorInboxDecision,
@@ -21,6 +22,13 @@ from brain_os.schemas.operator_inbox import (
     OperatorReleaseSession,
 )
 from brain_os.services.agency.agency_collector import collect_board_candidates
+from brain_os.services.operator_approval_sqlite import (
+    age_badge,
+    get_pending_item,
+    log_decision,
+    remove_pending,
+    replace_pending_items,
+)
 from brain_os.services.revenue_mode_drafts import find_latest_email_draft, recent_drafts_by_company
 from brain_os.services.revenue_mode_pipeline_store import _company_key
 from brain_os.systems.data_dir_lock import get_data_dir
@@ -81,6 +89,17 @@ def _body_snippet(body: str, *, max_len: int = 320) -> str:
     return text[: max_len - 1] + "…"
 
 
+def _annotate_item(item: OperatorInboxItem) -> OperatorInboxItem:
+    """Stamp producer + age badge for the unified surface."""
+    producer = (item.producer or str(item.source.get("type") or item.kind) or "").strip()
+    badge = item.age_badge or age_badge(item.created_at)
+    return item.model_copy(update={"producer": producer, "age_badge": badge})
+
+
+def _sort_newest_first(items: list[OperatorInboxItem]) -> list[OperatorInboxItem]:
+    return sorted(items, key=lambda i: str(i.created_at or ""), reverse=True)
+
+
 class OperatorInboxService:
     """Collect pending operator work, record decisions, manage release session."""
 
@@ -127,16 +146,26 @@ class OperatorInboxService:
         decision: str,
         actor: str,
         result: dict[str, Any],
-    ) -> None:
+        created_at: str | None = None,
+    ) -> dict[str, Any]:
+        telemetry = log_decision(
+            item_id=item_id,
+            verdict=decision,
+            created_at=created_at,
+            actor=actor,
+            result=result,
+        )
         line = {
             "item_id": item_id,
             "decision": decision,
             "actor": actor,
-            "at": _utcnow_iso(),
+            "at": telemetry.get("at") or _utcnow_iso(),
+            "latency_from_created": telemetry.get("latency_from_created"),
             "result": result,
         }
         with _audit_path().open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(line, ensure_ascii=True) + "\n")
+        return telemetry
 
     def load_session(self) -> OperatorReleaseSession:
         path = _session_path()
@@ -236,11 +265,123 @@ class OperatorInboxService:
                     return items
         return items
 
+    def _collect_overnight_pack_items(self, *, limit: int) -> list[OperatorInboxItem]:
+        """Recent global_pf1 overnight angle packs awaiting human review."""
+        items: list[OperatorInboxItem] = []
+        root = get_data_dir() / "experiments" / "global_pf1_overnight"
+        if not root.is_dir():
+            # Repo-relative fallback when BRAIN_DATA_DIR is the workspace data/
+            alt = (
+                Path(__file__).resolve().parents[3]
+                / "data"
+                / "experiments"
+                / "global_pf1_overnight"
+            )
+            root = alt if alt.is_dir() else root
+        if not root.is_dir():
+            return items
+        pack_files: list[Path] = []
+        try:
+            stamp_dirs = sorted(
+                [p for p in root.iterdir() if p.is_dir()],
+                key=lambda p: p.name,
+                reverse=True,
+            )[:5]
+            for stamp_dir in stamp_dirs:
+                packs_dir = stamp_dir / "packs"
+                if not packs_dir.is_dir():
+                    continue
+                pack_files.extend(
+                    sorted(packs_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+                )
+        except OSError:
+            return items
+        for path in pack_files:
+            if len(items) >= limit:
+                break
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(raw, dict):
+                continue
+            company = str(raw.get("company") or raw.get("domain") or path.stem).strip()
+            domain = str(raw.get("domain") or "").strip()
+            item_id = f"overnight:{path.parent.parent.name}:{path.stem}"
+            if self._is_dismissed(item_id):
+                continue
+            eng = raw.get("english") if isinstance(raw.get("english"), dict) else {}
+            subj = str(eng.get("subject") or "")[:72]
+            body = str(eng.get("body") or "")
+            send_ready = bool(raw.get("send_ready"))
+            items.append(
+                OperatorInboxItem(
+                    id=item_id,
+                    kind="outbound_email",
+                    title=f"{company} — overnight pack",
+                    subtitle=subj or f"DEMO overnight ({domain})",
+                    company_name=company,
+                    risk="external_visible",
+                    preview={
+                        "subject": subj,
+                        "body_snippet": _body_snippet(body),
+                        "send_ready": send_ready,
+                        "status": raw.get("status"),
+                        "voice_status_line": raw.get("voice_status_line"),
+                        "must_review": True,
+                    },
+                    source={
+                        "type": "overnight_pack",
+                        "path": str(path),
+                        "domain": domain,
+                        "stamp": path.parent.parent.name,
+                    },
+                    created_at=None,
+                )
+            )
+        return items
+
+    @staticmethod
+    def _review_rank_key(item: OperatorInboxItem) -> tuple[int, int, str]:
+        """Lower tuple sorts first — VIP/must_act style priority for must-review."""
+        src = str(item.source.get("type") or "")
+        preview = item.preview or {}
+        # 0 = morning / VIP-ish, 1 = must_act reply signals, 2 = overnight send_ready,
+        # 3 = other outbound, 4 = quotes/leads, 5 = rest
+        if item.kind == "morning_action":
+            tier = 0
+        elif src == "tinder":
+            tier = 1
+        elif src == "overnight_pack" and preview.get("send_ready"):
+            tier = 2
+        elif item.kind == "outbound_email":
+            tier = 3
+        elif item.kind in {"quote_draft", "lead_review"}:
+            tier = 4
+        else:
+            tier = 5
+        external = 0 if item.risk == "external_visible" else 1
+        return (tier, external, item.id)
+
+    def _rank_must_review(self, items: list[OperatorInboxItem]) -> list[OperatorInboxItem]:
+        ranked = sorted(items, key=self._review_rank_key)
+        out: list[OperatorInboxItem] = []
+        for idx, item in enumerate(ranked, start=1):
+            preview = dict(item.preview or {})
+            preview["review_rank"] = idx
+            out.append(item.model_copy(update={"preview": preview}))
+        return out
+
     def _collect_revenue_draft_items(self, *, limit: int) -> list[OperatorInboxItem]:
         items: list[OperatorInboxItem] = []
         seen: set[str] = set()
-        for row in recent_drafts_by_company(limit=60, include_body=True):
+        for row in recent_drafts_by_company(limit=80, include_body=True):
+            draft_status = str(row.get("status") or "").strip().lower()
+            if draft_status in {"stale", "rejected", "sent", "approved_to_send"}:
+                continue
             pst = str(row.get("pilot_status") or "").strip().lower()
+            if pst in {"stale", "rejected", "approved_to_send"}:
+                continue
             if pst not in {"", "pending_review"}:
                 continue
             dq = row.get("draft_quality") or {}
@@ -258,20 +399,29 @@ class OperatorInboxService:
                 continue
             subj = str(row.get("subject") or "")[:72]
             body = str(row.get("email_body") or "")
+            campaign = str(row.get("campaign_id") or row.get("source") or "revenue_draft")
             items.append(
-                OperatorInboxItem(
-                    id=item_id,
-                    kind="outbound_email",
-                    title=f"{company} — approve draft",
-                    subtitle=subj or "Revenue draft pending review",
-                    company_name=company,
-                    risk="external_visible",
-                    preview={
-                        "subject": subj,
-                        "body_snippet": _body_snippet(body),
-                    },
-                    source={"type": "revenue_draft", "company_name": company},
-                    created_at=str(row.get("timestamp") or "") or None,
+                _annotate_item(
+                    OperatorInboxItem(
+                        id=item_id,
+                        kind="outbound_email",
+                        title=f"{company} — approve draft",
+                        subtitle=subj or "Revenue draft pending review",
+                        company_name=company,
+                        risk="external_visible",
+                        producer=campaign if campaign.startswith("warm") else "revenue_draft",
+                        preview={
+                            "subject": subj,
+                            "body_snippet": _body_snippet(body),
+                            "campaign_id": campaign,
+                        },
+                        source={
+                            "type": "revenue_draft",
+                            "company_name": company,
+                            "campaign_id": campaign,
+                        },
+                        created_at=str(row.get("timestamp") or "") or None,
+                    )
                 )
             )
             if len(items) >= limit:
@@ -283,31 +433,135 @@ class OperatorInboxService:
             return None
         st = tinder_service.status()
         pending = st.get("pending_draft")
-        if not isinstance(pending, dict) or not pending.get("to"):
+        card = st.get("card") or {}
+        if isinstance(pending, dict) and pending.get("to"):
+            item_id = "tinder:pending"
+            if self._is_dismissed(item_id):
+                return None
+            to_addr = str(pending.get("to") or "")
+            subj = str(pending.get("subject") or "")
+            body = str(pending.get("body") or "")
+            company = str(card.get("company_name") or "")
+            return _annotate_item(
+                OperatorInboxItem(
+                    id=item_id,
+                    kind="outbound_email",
+                    title=f"Tinder — {company or to_addr}",
+                    subtitle=subj[:72],
+                    company_name=company,
+                    risk="external_visible",
+                    producer="tinder",
+                    preview={
+                        "to": to_addr,
+                        "subject": subj,
+                        "body_snippet": _body_snippet(body),
+                    },
+                    source={"type": "tinder"},
+                    created_at=str(pending.get("created_at") or st.get("saved_at") or "") or None,
+                )
+            )
+        # Surface current card when enabled but no pending draft (frozen checkpoint).
+        if not st.get("enabled"):
             return None
-        item_id = "tinder:pending"
+        if not isinstance(card, dict) or card.get("empty") or not card.get("recipient"):
+            return None
+        item_id = "tinder:needs_draft"
         if self._is_dismissed(item_id):
             return None
-        to_addr = str(pending.get("to") or "")
-        subj = str(pending.get("subject") or "")
-        body = str(pending.get("body") or "")
-        card = st.get("card") or {}
         company = str(card.get("company_name") or "")
-        return OperatorInboxItem(
-            id=item_id,
-            kind="outbound_email",
-            title=f"Tinder — {company or to_addr}",
-            subtitle=subj[:72],
-            company_name=company,
-            risk="external_visible",
-            preview={
-                "to": to_addr,
-                "subject": subj,
-                "body_snippet": _body_snippet(body),
-            },
-            source={"type": "tinder"},
-            created_at=None,
+        to_addr = str(card.get("recipient") or "")
+        return _annotate_item(
+            OperatorInboxItem(
+                id=item_id,
+                kind="outbound_email",
+                title=f"Tinder card — {company or to_addr}",
+                subtitle="Needs draft (checkpoint unfrozen / no pending_draft)",
+                company_name=company,
+                risk="external_visible",
+                producer="tinder",
+                preview={
+                    "to": to_addr,
+                    "cursor": st.get("cursor"),
+                    "queue_length": st.get("queue_length") or st.get("queue_len"),
+                    "history_summary": str(card.get("history_summary") or "")[:240],
+                },
+                source={"type": "tinder_needs_draft", "recipient": to_addr},
+                created_at=str(st.get("saved_at") or "") or None,
+            )
         )
+
+    def _collect_proactive_items(self, *, limit: int) -> list[OperatorInboxItem]:
+        from brain_os.services.proactive_inbox_queue import read_proactive_inbox_items
+
+        items: list[OperatorInboxItem] = []
+        for raw in read_proactive_inbox_items(limit=limit * 2):
+            if self._is_dismissed(raw.id):
+                continue
+            # Normalize orphan kinds into schema-safe values
+            kind = raw.kind
+            if kind not in {
+                "outbound_email",
+                "lead_review",
+                "quote_draft",
+                "aftermarket_trigger",
+                "morning_action",
+                "proactive_watch",
+                "onshoring_pack",
+                "agent_steering",
+            }:
+                kind = "proactive_watch"
+            items.append(
+                _annotate_item(
+                    raw.model_copy(
+                        update={
+                            "kind": kind,  # type: ignore[arg-type]
+                            "producer": str(raw.source.get("type") or kind),
+                        }
+                    )
+                )
+            )
+            if len(items) >= limit:
+                break
+        return items
+
+    def _collect_onshoring_items(self, *, limit: int) -> list[OperatorInboxItem]:
+        from brain_os.services.operator_approval_hygiene import iter_onshoring_pending
+
+        items: list[OperatorInboxItem] = []
+        for row in iter_onshoring_pending(limit=limit):
+            slug = str(row.get("slug") or "")
+            item_id = f"onshoring:{slug}"
+            if self._is_dismissed(item_id):
+                continue
+            company = str(row.get("company") or slug)
+            items.append(
+                _annotate_item(
+                    OperatorInboxItem(
+                        id=item_id,
+                        kind="onshoring_pack",
+                        title=f"Onshoring — {company}",
+                        subtitle=str(row.get("subject") or row.get("review_status") or "")[:72],
+                        company_name=company,
+                        risk="external_visible",
+                        producer="onshoring",
+                        preview={
+                            "subject": row.get("subject"),
+                            "body_snippet": _body_snippet(str(row.get("body") or "")),
+                            "contact_email": row.get("contact_email"),
+                            "review_status": row.get("review_status"),
+                            "campaign_id": row.get("campaign_id"),
+                        },
+                        source={
+                            "type": "onshoring_pack",
+                            "slug": slug,
+                            "path": row.get("path"),
+                            "contact_email": row.get("contact_email"),
+                        },
+                        created_at=str(row.get("generated_at") or "") or None,
+                    )
+                )
+            )
+        return items
 
     def _collect_lead_review_items(self, *, limit: int) -> list[OperatorInboxItem]:
         items: list[OperatorInboxItem] = []
@@ -383,6 +637,75 @@ class OperatorInboxService:
             )
         return items
 
+    def _collect_aftermarket_trigger_items(self, *, limit: int) -> list[OperatorInboxItem]:
+        from brain_os.services.installed_base.trigger_store import pending_operator_triggers
+
+        items: list[OperatorInboxItem] = []
+        for row in pending_operator_triggers()[:limit]:
+            trigger_id = str(row.get("trigger_id") or "")
+            if not trigger_id:
+                continue
+            item_id = f"ibtrigger:{trigger_id}"
+            if self._is_dismissed(item_id):
+                continue
+            company = str(row.get("company_name") or "")
+            trigger_type = str(row.get("trigger_type") or "trigger")
+            model = str(row.get("model") or "")
+            items.append(
+                OperatorInboxItem(
+                    id=item_id,
+                    kind="aftermarket_trigger",
+                    title=f"{company or 'Fleet'} — {trigger_type}",
+                    subtitle=f"{model} · {row.get('detail', '')[:100]}",
+                    company_name=company,
+                    risk="internal",
+                    preview={
+                        "trigger_id": trigger_id,
+                        "trigger_type": trigger_type,
+                        "model": model,
+                        "detail": str(row.get("detail") or ""),
+                        "suggested_play": str(row.get("suggested_play") or ""),
+                        "draft_cta": str(row.get("draft_cta") or ""),
+                        "evidence": row.get("evidence") or [],
+                        "campaign_id": str(row.get("campaign_id") or ""),
+                    },
+                    source={
+                        "type": "aftermarket_trigger",
+                        "trigger_id": trigger_id,
+                        "asset_id": str(row.get("asset_id") or ""),
+                    },
+                    created_at=str(row.get("fired_at") or ""),
+                )
+            )
+        return items
+
+    def _collect_morning_brain_items(self, *, limit: int) -> list[OperatorInboxItem]:
+        from brain_os.services.morning_brain import _inbox_snapshot_path, _local_date_iso
+
+        path = _inbox_snapshot_path()
+        if not path.is_file():
+            return []
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
+        if str(raw.get("local_date") or "") != _local_date_iso():
+            return []
+        items: list[OperatorInboxItem] = []
+        for row in raw.get("items") or []:
+            if not isinstance(row, dict):
+                continue
+            item_id = str(row.get("id") or "")
+            if not item_id or self._is_dismissed(item_id):
+                continue
+            try:
+                items.append(OperatorInboxItem.model_validate(row))
+            except Exception:
+                continue
+            if len(items) >= limit:
+                break
+        return items
+
     def _dedupe_outbound_by_company(
         self, items: list[OperatorInboxItem]
     ) -> list[OperatorInboxItem]:
@@ -416,13 +739,24 @@ class OperatorInboxService:
         quotes: Any | None = None,
         tinder_service: Any | None = None,
         limit_per_kind: int = 40,
+        persist_sqlite: bool = True,
+        include_quotes: bool = True,
     ) -> OperatorInboxPayload:
         outbound: list[OperatorInboxItem] = []
         if outbound_approvals is not None:
             outbound.extend(
-                self._collect_outbound_batch_items(outbound_approvals, limit=limit_per_kind)
+                [
+                    _annotate_item(i)
+                    for i in self._collect_outbound_batch_items(
+                        outbound_approvals, limit=limit_per_kind
+                    )
+                ]
             )
         outbound.extend(self._collect_revenue_draft_items(limit=limit_per_kind))
+        outbound.extend(
+            [_annotate_item(i) for i in self._collect_overnight_pack_items(limit=limit_per_kind)]
+        )
+        onshoring = self._collect_onshoring_items(limit=min(20, limit_per_kind))
         tinder_item = self._collect_tinder_item(tinder_service)
         if tinder_item is not None:
             ck = _company_key(tinder_item.company_name) if tinder_item.company_name else ""
@@ -435,10 +769,27 @@ class OperatorInboxService:
                 outbound.append(tinder_item)
         outbound = self._dedupe_outbound_by_company(outbound)
 
-        leads = self._collect_lead_review_items(limit=limit_per_kind)
-        quotes_items = await self._collect_quote_items(quotes, limit=limit_per_kind)
+        leads = [_annotate_item(i) for i in self._collect_lead_review_items(limit=limit_per_kind)]
+        quotes_items: list[OperatorInboxItem] = []
+        if include_quotes and quotes is not None:
+            quotes_items = [
+                _annotate_item(i)
+                for i in await self._collect_quote_items(quotes, limit=limit_per_kind)
+            ]
+        aftermarket = [
+            _annotate_item(i) for i in self._collect_aftermarket_trigger_items(limit=limit_per_kind)
+        ]
+        morning_items = [
+            _annotate_item(i) for i in self._collect_morning_brain_items(limit=limit_per_kind)
+        ]
+        proactive = self._collect_proactive_items(limit=limit_per_kind)
 
-        all_items = outbound + leads + quotes_items
+        all_items = (
+            outbound + onshoring + leads + quotes_items + aftermarket + morning_items + proactive
+        )
+        # Newest-first is the operator surface order; keep must-review rank in preview.
+        all_items = self._rank_must_review(all_items)
+        all_items = _sort_newest_first(all_items)
         from brain_os.services.math_mode import (
             build_math_promote_checklist,
             enrich_operator_inbox_item_math,
@@ -449,12 +800,25 @@ class OperatorInboxService:
         if math_mode_advisory_enabled():
             all_items = [enrich_operator_inbox_item_math(i) for i in all_items]
         ext = sum(1 for i in all_items if i.risk == "external_visible")
+        producers = sorted(
+            {
+                str(i.producer or i.source.get("type") or i.kind)
+                for i in all_items
+                if i.producer or i.kind
+            }
+        )
         summary = OperatorInboxSummary(
             outbound_email=len(outbound),
             lead_review=len(leads),
             quote_draft=len(quotes_items),
+            aftermarket_trigger=len(aftermarket),
+            morning_action=len(morning_items),
+            proactive_watch=sum(1 for i in proactive if i.kind == "proactive_watch"),
+            onshoring_pack=len(onshoring),
+            agent_steering=sum(1 for i in proactive if i.kind == "agent_steering"),
             total=len(all_items),
             external_pending=ext,
+            producer_types=producers,
         )
         session = self.load_session()
         hints: list[dict[str, Any]] = []
@@ -462,6 +826,11 @@ class OperatorInboxService:
         if advisory_on:
             hints = math_priority_hints_from_shadow(limit=10)
         promote_checklist = build_math_promote_checklist()
+        if persist_sqlite:
+            try:
+                replace_pending_items([i.model_dump() for i in all_items])
+            except OSError:
+                logger.debug("operator inbox sqlite persist failed", exc_info=True)
         return OperatorInboxPayload(
             summary=summary,
             items=all_items,
@@ -471,6 +840,24 @@ class OperatorInboxService:
             math_priority_hints=hints,
             math_promote_checklist=promote_checklist,
         )
+
+    def _resolve_item_from_cache_or_list(
+        self,
+        item_id: str,
+        items: list[OperatorInboxItem],
+    ) -> OperatorInboxItem | None:
+        cached = get_pending_item(item_id)
+        if cached is not None:
+            try:
+                return OperatorInboxItem.model_validate(cached)
+            except Exception:
+                pass
+        item = next((i for i in items if i.id == item_id), None)
+        if item is None:
+            for i in items:
+                if i.id.lower().startswith(item_id.lower()):
+                    return i
+        return item
 
     async def decide(
         self,
@@ -482,32 +869,40 @@ class OperatorInboxService:
         to_address: str | None = None,
         outbound_approvals: Any | None = None,
         email_processor: Any | None = None,
+        draft_sender: DraftSender | None = None,
         tinder_service: Any | None = None,
         quotes: Any | None = None,
+        sqlite_first: bool = True,
+        reason: str | None = None,
     ) -> dict[str, Any]:
-        inbox = await self.collect_inbox(
-            outbound_approvals=outbound_approvals,
-            quotes=quotes,
-            tinder_service=tinder_service,
-        )
-        item = next((i for i in inbox.items if i.id == item_id), None)
+        item: OperatorInboxItem | None = None
+        if sqlite_first:
+            item = self._resolve_item_from_cache_or_list(item_id, [])
         if item is None:
-            for i in inbox.items:
-                if i.id.lower().startswith(item_id.lower()):
-                    item = i
-                    break
+            # PG-down safe: skip quotes when not required for this id
+            need_quotes = item_id.lower().startswith("quote:")
+            inbox = await self.collect_inbox(
+                outbound_approvals=outbound_approvals,
+                quotes=quotes if need_quotes else None,
+                tinder_service=tinder_service,
+                include_quotes=need_quotes,
+            )
+            item = self._resolve_item_from_cache_or_list(item_id, list(inbox.items))
         if item is None:
             return {"ok": False, "error": f"Unknown item_id: {item_id}"}
 
         if decision == "snooze":
             self._dismiss(item.id, days=snooze_days)
-            self._append_audit(
+            result = {"ok": True, "action": "snoozed", "item_id": item.id}
+            telemetry = self._append_audit(
                 item_id=item.id,
                 decision=decision,
                 actor=actor,
-                result={"ok": True, "snooze_days": snooze_days},
+                result=result,
+                created_at=item.created_at,
             )
-            return {"ok": True, "action": "snoozed", "item_id": item.id}
+            remove_pending(item.id)
+            return {**result, "telemetry": telemetry}
 
         if decision == "reject":
             result = await self._reject_item(
@@ -516,8 +911,18 @@ class OperatorInboxService:
                 outbound_approvals=outbound_approvals,
                 tinder_service=tinder_service,
             )
-            self._append_audit(item_id=item.id, decision=decision, actor=actor, result=result)
-            return result
+            if reason:
+                result["reason"] = reason
+            telemetry = self._append_audit(
+                item_id=item.id,
+                decision=decision,
+                actor=actor,
+                result=result,
+                created_at=item.created_at,
+            )
+            if result.get("ok"):
+                remove_pending(item.id)
+            return {**result, "telemetry": telemetry}
 
         result = await self._approve_item(
             item,
@@ -525,10 +930,19 @@ class OperatorInboxService:
             to_address=to_address,
             outbound_approvals=outbound_approvals,
             email_processor=email_processor,
+            draft_sender=draft_sender,
             tinder_service=tinder_service,
         )
-        self._append_audit(item_id=item.id, decision="approve", actor=actor, result=result)
-        return result
+        telemetry = self._append_audit(
+            item_id=item.id,
+            decision="approve",
+            actor=actor,
+            result=result,
+            created_at=item.created_at,
+        )
+        if result.get("ok"):
+            remove_pending(item.id)
+        return {**result, "telemetry": telemetry}
 
     async def _approve_item(
         self,
@@ -538,9 +952,11 @@ class OperatorInboxService:
         to_address: str | None = None,
         outbound_approvals: Any | None = None,
         email_processor: Any | None = None,
+        draft_sender: DraftSender | None = None,
         tinder_service: Any | None = None,
     ) -> dict[str, Any]:
         src_type = str(item.source.get("type") or "")
+        _ = email_processor  # L3.3c: EmailProcessor DI; staging uses draft_sender only
 
         if item.kind == "quote_draft":
             self._dismiss(item.id, days=3650)
@@ -560,12 +976,46 @@ class OperatorInboxService:
                 "message": "Lead review acknowledged.",
             }
 
-        if src_type == "batch":
-            if outbound_approvals is None or email_processor is None:
-                return {"ok": False, "error": "Outbound approvals or email processor unavailable."}
-            from brain_os.interfaces.email_processor_draft_sender import GmailDraftSender
+        if item.kind == "aftermarket_trigger":
+            from brain_os.services.installed_base.draft_chain import approve_draft_for_send
 
-            sender = GmailDraftSender(email_processor=email_processor)
+            trigger_id = str(item.source.get("trigger_id") or item.preview.get("trigger_id") or "")
+            if not trigger_id:
+                return {"ok": False, "error": "Missing trigger_id on aftermarket inbox item."}
+            try:
+                from brain_os.data.crm import CRMDatabase
+
+                crm = CRMDatabase()
+            except Exception:
+                crm = None
+            draft_result = await approve_draft_for_send(trigger_id, crm, draft_sender=draft_sender)
+            if draft_result.get("status") not in {"ok"}:
+                return {
+                    "ok": False,
+                    "error": draft_result.get("reason") or draft_result.get("status"),
+                    "draft_result": draft_result,
+                }
+            self._dismiss(item.id, days=3650)
+            gmail_staged = (draft_result.get("gmail_stage") or {}).get("status") == "ok"
+            return {
+                "ok": True,
+                "action": "aftermarket_gmail_draft_staged"
+                if gmail_staged
+                else "aftermarket_draft_staged",
+                "item_id": item.id,
+                "trigger_id": trigger_id,
+                "draft_result": draft_result,
+                "gmail_draft_id": (draft_result.get("gmail_stage") or {}).get("gmail_draft_id"),
+                "message": (
+                    "Gmail draft staged — send from Gmail or Tinder after review."
+                    if gmail_staged
+                    else "Warm draft recorded; Gmail staging skipped (no processor or recipient)."
+                ),
+            }
+
+        if src_type == "batch":
+            if outbound_approvals is None or draft_sender is None:
+                return {"ok": False, "error": "Outbound approvals or draft sender unavailable."}
             batch_id = str(item.source.get("batch_id") or "")
             index = int(item.source.get("index") or 0)
             try:
@@ -573,7 +1023,7 @@ class OperatorInboxService:
                     batch_id=batch_id,
                     index=index,
                     approved_by=actor,
-                    gmail_draft_sender=sender,
+                    gmail_draft_sender=draft_sender,
                 )
             except (KeyError, ValueError, IndexError) as exc:
                 return {"ok": False, "error": str(exc)}
@@ -590,9 +1040,8 @@ class OperatorInboxService:
             draft = find_latest_email_draft(company) if company else None
             if not draft:
                 return {"ok": False, "error": "No email draft found for company."}
-            if email_processor is None:
-                return {"ok": False, "error": "Email processor unavailable."}
-            from brain_os.interfaces.email_processor_draft_sender import GmailDraftSender
+            if draft_sender is None:
+                return {"ok": False, "error": "Draft sender unavailable."}
             from brain_os.services.revenue_mode import set_pilot_decision, upsert_pipeline_status
 
             to_addr = (to_address or str(draft.get("to") or "")).strip()
@@ -603,8 +1052,7 @@ class OperatorInboxService:
                     "needs_to": True,
                     "company_name": company,
                 }
-            sender = GmailDraftSender(email_processor=email_processor)
-            gmail_draft = await sender.create_draft(
+            gmail_draft = await draft_sender.create_draft(
                 to=to_addr,
                 subject=str(draft.get("subject") or ""),
                 body=str(draft.get("email_body") or ""),
@@ -621,15 +1069,74 @@ class OperatorInboxService:
             }
 
         if src_type == "tinder":
-            if tinder_service is None or email_processor is None:
-                return {"ok": False, "error": "Tinder or email processor unavailable."}
+            if tinder_service is None or draft_sender is None:
+                return {"ok": False, "error": "Tinder or draft sender unavailable."}
             staged = await tinder_service.stage_pending_draft_to_gmail(
-                email_processor=email_processor,
+                draft_sender=draft_sender,
             )
             if not staged.get("ok"):
                 return staged
             self._dismiss(item.id, days=3650)
             return {**staged, "action": "gmail_draft_staged", "item_id": item.id}
+
+        if src_type == "tinder_needs_draft":
+            self._dismiss(item.id, days=1)
+            return {
+                "ok": True,
+                "action": "tinder_draft_hint",
+                "item_id": item.id,
+                "message": "Run `brain tinder draft` for the current card, then `brain ok tinder:pending`.",
+                "recipient": item.source.get("recipient"),
+            }
+
+        if src_type == "onshoring_pack" or item.kind == "onshoring_pack":
+            from brain_os.services.operator_approval_hygiene import mark_onshoring_decision
+
+            slug = str(item.source.get("slug") or "")
+            marked = mark_onshoring_decision(slug, approved=True, actor=actor)
+            if not marked.get("ok"):
+                return marked
+            # Stage Gmail when draft sender + contact available
+            to_addr = (to_address or str(item.source.get("contact_email") or "")).strip()
+            body = str((item.preview or {}).get("body_snippet") or "")
+            subject = str((item.preview or {}).get("subject") or item.subtitle or "")
+            gmail_draft = None
+            if draft_sender is not None and to_addr and "@" in to_addr:
+                from pathlib import Path
+
+                pack_path = Path(str(item.source.get("path") or ""))
+                draft_file = pack_path / "outbound_draft.txt"
+                if draft_file.is_file():
+                    text = draft_file.read_text(encoding="utf-8")
+                    for line in text.splitlines():
+                        if line.lower().startswith("subject:"):
+                            subject = line.split(":", 1)[1].strip()
+                    parts = text.split("\n\n", 1)
+                    body = parts[1] if len(parts) > 1 else text
+                gmail_draft = await draft_sender.create_draft(
+                    to=to_addr, subject=subject, body=body
+                )
+            self._dismiss(item.id, days=3650)
+            return {
+                "ok": True,
+                "action": "onshoring_approved",
+                "item_id": item.id,
+                "slug": slug,
+                "gmail_draft": gmail_draft,
+            }
+
+        if src_type in {"overnight_pack", "morning_brain", "event_reactor"} or item.kind in {
+            "morning_action",
+            "proactive_watch",
+            "agent_steering",
+        }:
+            self._dismiss(item.id, days=3650)
+            return {
+                "ok": True,
+                "action": "acknowledged",
+                "item_id": item.id,
+                "message": f"Acknowledged {src_type or item.kind} (no auto-send).",
+            }
 
         return {"ok": False, "error": f"Unsupported source type: {src_type}"}
 
@@ -646,6 +1153,15 @@ class OperatorInboxService:
         if item.kind == "quote_draft" or item.kind == "lead_review":
             self._dismiss(item.id, days=30)
             return {"ok": True, "action": "dismissed", "item_id": item.id}
+
+        if item.kind == "aftermarket_trigger":
+            from brain_os.services.installed_base.trigger_store import mark_trigger_operator_status
+
+            trigger_id = str(item.source.get("trigger_id") or item.preview.get("trigger_id") or "")
+            if trigger_id:
+                mark_trigger_operator_status(trigger_id, "rejected")
+            self._dismiss(item.id, days=30)
+            return {"ok": True, "action": "aftermarket_trigger_rejected", "item_id": item.id}
 
         if src_type == "batch":
             batch_id = str(item.source.get("batch_id") or "")
@@ -676,6 +1192,20 @@ class OperatorInboxService:
                 tinder_service.left(note="operator_inbox_reject")
             self._dismiss(item.id, days=3650)
             return {"ok": True, "action": "tinder_skipped", "item_id": item.id}
+
+        if src_type == "tinder_needs_draft":
+            if tinder_service is not None:
+                tinder_service.left(note="operator_inbox_reject_needs_draft")
+            self._dismiss(item.id, days=3650)
+            return {"ok": True, "action": "tinder_card_skipped", "item_id": item.id}
+
+        if src_type == "onshoring_pack" or item.kind == "onshoring_pack":
+            from brain_os.services.operator_approval_hygiene import mark_onshoring_decision
+
+            slug = str(item.source.get("slug") or "")
+            mark_onshoring_decision(slug, approved=False, actor=actor)
+            self._dismiss(item.id, days=3650)
+            return {"ok": True, "action": "onshoring_rejected", "item_id": item.id}
 
         self._dismiss(item.id, days=30)
         return {"ok": True, "action": "dismissed", "item_id": item.id}

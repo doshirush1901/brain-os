@@ -10,13 +10,19 @@ import asyncio
 import os
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+import brain_os.data.atlas_logbook
+import brain_os.data.installed_base_models
+import brain_os.data.receivables
+import brain_os.data.service_tickets
+import brain_os.data.spares_catalog
+import brain_os.data.work_orders
+from alembic import context
 from brain_os.data.crm import Base
-from brain_os.data.quotes import QuoteModel  # noqa: F401 — registers table on Base.metadata
-from brain_os.data.recruitment import (  # noqa: F401 — registers recruitment tables on Base.metadata
+from brain_os.data.quotes import QuoteModel
+from brain_os.data.recruitment import (
     RecruitmentCandidateModel,
     RecruitmentStageEventModel,
 )

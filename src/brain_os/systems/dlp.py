@@ -42,7 +42,6 @@ _DLP_HTTP_ERRORS = (httpx.HTTPError, asyncio.TimeoutError)
 _DLP_JSON_BODY_ERRORS = (json.JSONDecodeError, ValueError, KeyError, TypeError)
 
 _SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
-_TOKEN_DIR = Path(".credentials")
 _TOKEN_FILE = "token_dlp.json"
 
 _DEFAULT_INFO_TYPES = [
@@ -77,7 +76,7 @@ class DlpService:
 
         self._project_id = cfg.project_id
         self._creds_path = Path(gcfg.credentials_path)
-        self._token_path = _TOKEN_DIR / _TOKEN_FILE
+        self._token_path = Path(_TOKEN_FILE)
         self._creds: Credentials | None = None
 
     @property
@@ -177,6 +176,8 @@ class DlpService:
                 raise
             except _DLP_HTTP_ERRORS as exc:
                 raise DlpError(f"DLP inspect HTTP failed: {exc}") from exc
+            except _DLP_CONNECT_ERRORS as exc:
+                raise DlpError(f"DLP inspect failed: {exc}") from exc
 
         try:
             body = resp.json()

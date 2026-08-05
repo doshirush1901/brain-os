@@ -140,6 +140,15 @@ class VoiceSystem:
         behavioral_modifiers: dict[str, str] | None = None,
     ) -> str:
         """Shape a raw agent response for the target channel and recipient."""
+        # Sphinx Socratic gate must surface questions verbatim (CLI / MCP / chat).
+        try:
+            from brain_os.services.socratic_gate import is_socratic_needs_input_text
+
+            if is_socratic_needs_input_text(raw_response):
+                return raw_response
+        except Exception:
+            logger.debug("socratic passthrough check failed", exc_info=True)
+
         modifiers = behavioral_modifiers or {}
         profile_key = resolve_channel_profile_key(channel)
         profile = CHANNEL_PROFILES.get(profile_key, _DEFAULT_PROFILE)

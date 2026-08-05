@@ -62,7 +62,7 @@ class Calliope(BaseAgent):
                 description="Polish and improve a piece of text.",
                 parameters={
                     "text": "The text to polish",
-                    "tone": "Desired tone (default: professional)",
+                    "tone": "Desired tone (default: tim_urban — Wait But Why curiosity)",
                 },
                 handler=self._tool_polish_text,
             )
@@ -158,7 +158,7 @@ class Calliope(BaseAgent):
     async def _tool_polish_text(
         self,
         text: str,
-        tone: str = "professional",
+        tone: str = "tim_urban",
     ) -> str:
         return await self.use_skill("polish_text", text=text, tone=tone)
 
@@ -265,7 +265,7 @@ class Calliope(BaseAgent):
             return await self.use_skill(
                 "polish_text",
                 text=query,
-                tone=ctx.get("tone", "professional"),
+                tone=ctx.get("tone", "tim_urban"),
             )
 
         if task == "translate":

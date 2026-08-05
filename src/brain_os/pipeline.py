@@ -113,6 +113,10 @@ class RequestPipeline:
             "failures_recent": [],  # bounded list of {run_id, error, at}
         }
         self._learn_failures_cap: int = 25
+        # Soft-fail observability: last request's structured degradation rows
+        # (from trace["degradation"]), independent of LEARN success.
+        self._last_degradation: list[dict[str, str]] = []
+        self._last_degradation_run_id: str | None = None
 
         self._load_pending_clarifications()
 
@@ -175,6 +179,18 @@ class RequestPipeline:
     def _attach_pipeline_trace(self, metadata: dict[str, Any], trace: dict[str, Any]) -> None:
         """Copy structured observability trace for API/MCP/eval callers."""
         try:
+            # Always stash last degradation for GET /api/learn/last (ops one-stop),
+            # even when full pipeline_trace attach is disabled.
+            deg = trace.get("degradation")
+            if isinstance(deg, list):
+                self._last_degradation = [
+                    {str(k): str(v) for k, v in row.items()} for row in deg if isinstance(row, dict)
+                ]
+            else:
+                self._last_degradation = []
+            rid = trace.get("run_id")
+            self._last_degradation_run_id = str(rid) if rid else None
+
             from brain_os.config import get_settings as _gst
 
             if not _gst().app.pipeline_attach_observability_trace:
@@ -182,6 +198,13 @@ class RequestPipeline:
             metadata["pipeline_trace"] = dict(trace)
         except Exception:
             logger.debug("pipeline_trace attach skipped", exc_info=True)
+
+    def get_last_degradation(self) -> dict[str, Any]:
+        """Return soft-fail rows from the most recent request that attached a trace."""
+        return {
+            "run_id": self._last_degradation_run_id,
+            "events": list(self._last_degradation),
+        }
 
     def _rank_optional_for_query(self, query: str, optional_agents: list[str]) -> list[str]:
         from brain_os.config import get_settings as _gro
@@ -211,28 +234,41 @@ class RequestPipeline:
             scoreboard,
         )
 
-    async def _pop_clarification(self, sender_id: str) -> dict[str, Any] | None:
+    async def _pop_clarification(
+        self,
+        sender_id: str,
+        *,
+        gate_id: str | None = None,
+    ) -> dict[str, Any] | None:
         """Pop a pending clarification from both memory and Redis."""
-        async with self._state_lock:
-            result = self._pending_clarifications.pop(sender_id, None)
-        if result is not None:
-            if self._redis is not None:
-                try:
-                    await self._redis.hdel(self._CLARIFICATION_REDIS_KEY, sender_id)
-                except Exception:
-                    logger.warning("Failed to remove clarification from Redis", exc_info=True)
-            return result
-        if self._redis is not None:
-            try:
-                import json as _json
+        from brain_os.pipeline_phases.clarification_state import pop_clarification
 
-                raw = await self._redis.hget(self._CLARIFICATION_REDIS_KEY, sender_id)
-                if raw:
-                    await self._redis.hdel(self._CLARIFICATION_REDIS_KEY, sender_id)
-                    return _json.loads(raw)
-            except Exception:
-                logger.warning("Failed to load clarification from Redis", exc_info=True)
-        return None
+        return await pop_clarification(
+            redis=self._redis,
+            pending=self._pending_clarifications,
+            lock=self._state_lock,
+            sender_id=sender_id,
+            redis_key=self._CLARIFICATION_REDIS_KEY,
+            gate_id=gate_id,
+        )
+
+    async def _get_clarification(
+        self,
+        *,
+        sender_id: str | None = None,
+        gate_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Peek pending clarification without popping."""
+        from brain_os.pipeline_phases.clarification_state import get_clarification
+
+        return await get_clarification(
+            redis=self._redis,
+            pending=self._pending_clarifications,
+            lock=self._state_lock,
+            redis_key=self._CLARIFICATION_REDIS_KEY,
+            sender_id=sender_id,
+            gate_id=gate_id,
+        )
 
     async def _store_clarification(
         self,
@@ -242,6 +278,7 @@ class RequestPipeline:
         original_query: str,
         payload: ClarificationPayload,
         checkpoint: dict[str, Any] | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> str:
         """Persist normalized clarification state and return rendered question text."""
         from brain_os.pipeline_phases.clarification_state import store_clarification
@@ -256,6 +293,7 @@ class RequestPipeline:
             payload=payload,
             redis_key=self._CLARIFICATION_REDIS_KEY,
             checkpoint=checkpoint,
+            extra=extra,
         )
 
     def get_recent_stage_timings(self, n: int = 24) -> list[dict[str, Any]]:
@@ -369,38 +407,52 @@ class RequestPipeline:
 
         Stage breakdown (including substeps) is documented in AGENTS.md § Request Pipeline.
         """
-        async with self._request_semaphore:
-            try:
-                from brain_os.config import get_settings
+        from brain_os.services.llm_caller_context import InvocationSource, llm_caller_scope
 
-                _timeout = get_settings().app.pipeline_timeout
-                out = await asyncio.wait_for(
-                    self._process_request_inner(
-                        raw_input,
-                        channel,
+        meta = metadata if isinstance(metadata, dict) else {}
+        source: InvocationSource = (
+            "background"
+            if str(meta.get("llm_source") or "").lower() == "background"
+            else "operator"
+        )
+        with llm_caller_scope(
+            job="pipeline",
+            pipeline_step="process_request",
+            source=source,
+            call_site=f"pipeline:{channel}",
+        ):
+            async with self._request_semaphore:
+                try:
+                    from brain_os.config import get_settings
+
+                    _timeout = get_settings().app.pipeline_timeout
+                    out = await asyncio.wait_for(
+                        self._process_request_inner(
+                            raw_input,
+                            channel,
+                            sender_id,
+                            metadata,
+                            on_progress,
+                        ),
+                        timeout=_timeout,
+                    )
+                    await self._maybe_record_llm_budget_turn(
                         sender_id,
-                        metadata,
-                        on_progress,
-                    ),
-                    timeout=_timeout,
-                )
-                await self._maybe_record_llm_budget_turn(
-                    sender_id,
-                    raw_input,
-                    out[0],
-                    out[1],
-                )
-                return out
-            except TimeoutError:
-                from brain_os.config import get_settings
+                        raw_input,
+                        out[0],
+                        out[1],
+                    )
+                    return out
+                except TimeoutError:
+                    from brain_os.config import get_settings
 
-                _timeout = get_settings().app.pipeline_timeout
-                return build_pipeline_timeout_response(
-                    timeout_seconds=_timeout,
-                    sender_id=sender_id,
-                    metadata=metadata,
-                    logger=logger,
-                )
+                    _timeout = get_settings().app.pipeline_timeout
+                    return build_pipeline_timeout_response(
+                        timeout_seconds=_timeout,
+                        sender_id=sender_id,
+                        metadata=metadata,
+                        logger=logger,
+                    )
 
     async def _process_request_inner(
         self,
@@ -636,7 +688,7 @@ class RequestPipeline:
 
 
 # Back-compat re-exports for callers that still import from pipeline.
-from brain_os.pipeline_runtime import (  # noqa: F401, I001
+from brain_os.pipeline_runtime import (  # noqa: I001
     _AMBIGUITY_SENSITIVE_PATTERNS,
     _DEFAULT_CHEAP_EXIT_BYPASS_KEYWORDS,
     _DEDUP_ENVELOPE_VERSION,
@@ -655,6 +707,7 @@ from brain_os.pipeline_runtime import (  # noqa: F401, I001
 from brain_os.pipeline_phases.error_handling import (
     build_pipeline_timeout_response,
 )
+from brain_os.pipeline_phases.outreach import prefetch_outreach_thread_evidence
 from brain_os.pipeline_phases.plan import (
     maybe_router_embedding_tiebreak,
 )

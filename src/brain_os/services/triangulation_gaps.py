@@ -54,6 +54,12 @@ _HEX_LEGS: tuple[LegSpec, ...] = (
         "hex",
     ),
     LegSpec(
+        "shopfloor_crm_contradiction",
+        "Shopfloor vs CRM label",
+        "Treat as LIVE customer when Atlas in_flight/installation; fix CRM stage",
+        "hex",
+    ),
+    LegSpec(
         "graph_quotes",
         "Graph (quotes)",
         "find_company_quotes / find_related_entities",
@@ -129,6 +135,14 @@ def _leg_missing(key: str, brief: AccountBrief, *, card: dict[str, Any] | None) 
         return not brief.contact_email and not brief.domain
     if key == "production_atlas":
         return not _has_production_signal(brief)
+    if key == "shopfloor_crm_contradiction":
+        from brain_os.config import get_settings
+        from brain_os.services.shopfloor_before_customer import has_shopfloor_crm_contradiction
+
+        if not bool(getattr(get_settings().app, "shopfloor_before_customer_enabled", True)):
+            return False
+        # Gap present when contradiction exists (leg "missing" = problem)
+        return has_shopfloor_crm_contradiction(brief)
     if key == "graph_quotes":
         return not _has_graph_signal(brief)
     if key == "proof_registry":

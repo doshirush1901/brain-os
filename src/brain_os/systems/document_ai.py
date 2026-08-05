@@ -17,6 +17,8 @@ import asyncio
 import base64
 import json
 import logging
+import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -30,12 +32,23 @@ from brain_os.config import DocumentAIConfig, GoogleConfig, get_settings
 logger = logging.getLogger(__name__)
 
 _SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
-_TOKEN_DIR = Path(".credentials")
 _TOKEN_FILE = "token_document_ai.json"
 
 
 class DocumentAIError(Exception):
     """Raised when a Document AI operation fails."""
+
+
+def _interactive_oauth_allowed() -> bool:
+    """True only for a real operator terminal — never dream/daemon/heartbeat."""
+    if (os.environ.get("BRAIN_HEADLESS") or "").strip() in {"1", "true", "TRUE", "yes", "YES"}:
+        return False
+    if (os.environ.get("BRAIN_DAEMON") or "").strip() in {"1", "true", "TRUE", "yes", "YES"}:
+        return False
+    try:
+        return bool(sys.stdin.isatty())
+    except Exception:
+        return False
 
 
 def mime_type_for_document_ai_filename(filename: str) -> str:
@@ -103,7 +116,7 @@ class DocumentAIService:
         }
         self._request_timeout = float(cfg.request_timeout_seconds)
         self._creds_path = Path(gcfg.credentials_path)
-        self._token_path = _TOKEN_DIR / _TOKEN_FILE
+        self._token_path = Path(_TOKEN_FILE)
         self._creds: Credentials | None = None
 
     @property
@@ -129,6 +142,19 @@ class DocumentAIService:
             return
 
         def _authenticate() -> Credentials:
+            # Drop dead Cursor sandbox proxies before any HTTPS token call.
+            for key in (
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+                "http_proxy",
+                "https_proxy",
+                "all_proxy",
+            ):
+                val = (os.environ.get(key) or "").strip().lower()
+                if "127.0.0.1" in val or "localhost" in val:
+                    os.environ.pop(key, None)
+
             creds: Credentials | None = None
 
             if self._token_path.exists():
@@ -138,8 +164,22 @@ class DocumentAIService:
                 )
 
             if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
+                try:
+                    creds.refresh(Request())
+                except Exception as exc:
+                    # Headless/daemon: never fall through to run_local_server.
+                    raise DocumentAIError(
+                        f"Document AI token refresh failed (cached refresh token): {exc}. "
+                        "Re-auth once from an interactive shell "
+                        "(delete token_document_ai.json and run ira docai parse)."
+                    ) from exc
             elif not creds or not creds.valid:
+                if not _interactive_oauth_allowed():
+                    raise DocumentAIError(
+                        "Document AI OAuth token missing/invalid and interactive "
+                        "local-server flow is disabled in daemon/headless context. "
+                        "Refresh token_document_ai.json from a terminal once."
+                    )
                 if not self._creds_path.exists():
                     raise DocumentAIError(f"Credentials file not found: {self._creds_path}")
                 flow = InstalledAppFlow.from_client_secrets_file(
@@ -154,6 +194,8 @@ class DocumentAIService:
         try:
             self._creds = await asyncio.to_thread(_authenticate)
             logger.info("Document AI service connected (project=%s)", self._project_id)
+        except DocumentAIError:
+            raise
         except (OSError, RuntimeError, ValueError, TypeError) as exc:
             logger.error("Document AI authentication failed: %s", exc)
             raise DocumentAIError(str(exc)) from exc
@@ -225,9 +267,12 @@ class DocumentAIService:
             except (
                 httpx.HTTPError,
                 TimeoutError,
+                OSError,
+                RuntimeError,
                 ValueError,
                 KeyError,
                 TypeError,
+                AttributeError,
                 json.JSONDecodeError,
             ) as exc:
                 raise DocumentAIError(f"Document AI request failed: {exc}") from exc

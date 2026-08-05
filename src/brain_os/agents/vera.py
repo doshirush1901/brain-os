@@ -171,7 +171,12 @@ class Vera(BaseAgent):
             include_physics=True,
             include_maestro=False,
         )
-        register_formula_tools(self, include_registry=True, include_math_mode=False)
+        register_formula_tools(
+            self,
+            include_registry=False,
+            include_score_formula=False,
+            include_math_mode=False,
+        )
         register_creative_mind_tools(self, profile="verify")
 
     async def handle(self, query: str, context: dict[str, Any] | None = None) -> str:

@@ -1,19 +1,21 @@
-"""Async pub/sub message bus for inter-agent communication.
+"""Deprecated in-process agent pub/sub (prefer :class:`~brain_os.systems.data_event_bus.DataEventBus`).
 
-Every agent publishes and receives :class:`~brain_os.data.models.AgentMessage`
-objects through the bus.  Messages can be directed (to a specific agent)
-or broadcast (to all subscribers).  A bounded in-process log of recent
-messages is kept for debugging (``AppConfig.message_bus_log_maxlen``).
+Historically every agent was expected to publish/receive
+:class:`~brain_os.data.models.AgentMessage` objects through this bus. In practice
+the Pantheon routes via ``ask_agent`` / Athena delegation, and CRM↔graph↔vector
+sync uses :class:`~brain_os.systems.data_event_bus.DataEventBus`. This module remains
+for constructor wiring (Pantheon / CLI / golden runners) and a curiosity idle
+tick that no longer depends on pub/sub.
 
-When a :class:`~brain_os.systems.redis_cache.RedisCache` instance is attached
-via :meth:`set_redis`, every published message is also persisted to a
-Redis Stream (``ira:bus:messages``) for durability and cross-process replay.
+``subscribe`` / ``publish`` / ``send`` / ``broadcast`` log a one-shot
+deprecation warning per process when used.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import warnings
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -30,10 +32,25 @@ MessageHandler = Callable[[AgentMessage], Awaitable[None]]
 _BROADCAST = "__broadcast__"
 _REDIS_STREAM = "ira:bus:messages"
 _STREAM_MAXLEN = 5000
+_DEPRECATION_WARNED = False
+
+
+def _warn_deprecated_surface(api: str) -> None:
+    """Log once that agent-level MessageBus pub/sub is decorative."""
+    global _DEPRECATION_WARNED
+    if _DEPRECATION_WARNED:
+        return
+    _DEPRECATION_WARNED = True
+    msg = (
+        f"MessageBus.{api} is deprecated for agent pub/sub; "
+        "use DataEventBus for CRM/graph/vector sync and ask_agent for delegation"
+    )
+    logger.warning(msg)
+    warnings.warn(msg, DeprecationWarning, stacklevel=3)
 
 
 class MessageBus:
-    """Async message bus using :class:`asyncio.Queue`.
+    """Async message bus using :class:`asyncio.Queue` (deprecated agent surface).
 
     Optionally backed by a Redis Stream for message persistence.
     """
@@ -56,17 +73,20 @@ class MessageBus:
 
     def subscribe(self, agent_name: str, handler: MessageHandler) -> None:
         """Register *handler* to receive messages addressed to *agent_name*."""
+        _warn_deprecated_surface("subscribe")
         self._handlers[agent_name].append(handler)
         logger.debug("Subscribed handler for '%s'", agent_name)
 
     def subscribe_broadcast(self, handler: MessageHandler) -> None:
         """Register *handler* to receive all broadcast messages."""
+        _warn_deprecated_surface("subscribe_broadcast")
         self._handlers[_BROADCAST].append(handler)
 
     # ── publishing ───────────────────────────────────────────────────────
 
     async def publish(self, message: AgentMessage) -> None:
         """Enqueue a message for delivery and persist to Redis if available."""
+        _warn_deprecated_surface("publish")
         await self._queue.put(message)
         logger.debug(
             "Published message from '%s' to '%s'",
@@ -102,6 +122,7 @@ class MessageBus:
         context: dict[str, Any] | None = None,
     ) -> None:
         """Convenience: build and publish an :class:`AgentMessage`."""
+        _warn_deprecated_surface("send")
         msg = AgentMessage(
             from_agent=from_agent,
             to_agent=to_agent,
@@ -117,6 +138,7 @@ class MessageBus:
         context: dict[str, Any] | None = None,
     ) -> None:
         """Publish a message to all broadcast subscribers."""
+        _warn_deprecated_surface("broadcast")
         await self.send(from_agent, _BROADCAST, query, context)
 
     # ── lifecycle ────────────────────────────────────────────────────────

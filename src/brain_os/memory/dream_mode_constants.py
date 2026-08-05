@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from brain_os.prompt_loader import load_prompt
 
@@ -19,3 +20,13 @@ INSIGHT_SYSTEM_PROMPT = load_prompt("dream_insight")
 PROCEDURAL_SYSTEM_PROMPT = load_prompt("dream_procedural")
 PRUNE_SYSTEM_PROMPT = load_prompt("dream_prune")
 JOURNAL_SYSTEM_PROMPT = load_prompt("dream_agent_journal")
+
+
+def normalize_stage_status(summary: dict[str, Any]) -> dict[str, Any]:
+    """Map worker statuses onto the dream contract and retain the original as ``reason``."""
+    status = str(summary.get("status", "ok"))
+    return (
+        summary
+        if status in ("ok", "error", "skipped", "timeout")
+        else {**summary, "status": "skipped", "reason": status}
+    )

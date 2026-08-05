@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from brain_os.schemas.account_journey import AccountJourney
+from brain_os.schemas.account_state import AccountState
 from brain_os.schemas.math_mode import MathModeAdvisory
 from brain_os.schemas.operator_context import ContextPrecedent
 from brain_os.schemas.similar_company import SimilarCompany
@@ -18,6 +19,15 @@ class SourceRef(BaseModel):
     ref_id: str = ""
     label: str = ""
     freshness: str | None = None
+
+
+class EvidenceLeg(BaseModel):
+    leg: str = Field(..., description="crm | mail | atlas | website | proof")
+    label: str = ""
+    mode: str = Field(default="missing", description="live | static | missing | skipped")
+    age_days: int | None = None
+    stale: bool = False
+    detail: str = ""
 
 
 class TimelineEvent(BaseModel):
@@ -56,6 +66,22 @@ class AtlasProductionSnapshot(BaseModel):
     matched_projects: list[dict[str, Any]] = Field(default_factory=list)
     summary_line: str = ""
     portfolio_updated_at: str | None = None
+
+
+class ShopfloorTruthSnapshot(BaseModel):
+    """CRM vs Atlas shopfloor contradiction (brain growth #6)."""
+
+    ok: bool = True
+    blocked: bool = False
+    status: str = Field(
+        default="ok",
+        description="ok | contradiction | not_applicable | skipped",
+    )
+    display_label: str = ""
+    atlas_relation: str = ""
+    crm_stage: str = ""
+    failures: list[str] = Field(default_factory=list)
+    detail: str = ""
 
 
 class AccountBriefSynthesisInput(BaseModel):
@@ -122,6 +148,18 @@ class AccountBrief(BaseModel):
         default=None,
         description="Match against data/knowledge/atlas_production_portfolio.json.",
     )
+    shopfloor_truth: ShopfloorTruthSnapshot | None = Field(
+        default=None,
+        description="CRM lead vs Atlas in-flight contradiction (brain growth #6).",
+    )
+    evidence_legs: list[EvidenceLeg] = Field(
+        default_factory=list,
+        description="Triangle/hex leg freshness for operator cadence.",
+    )
+    account_state: AccountState | None = Field(
+        default=None,
+        description="Canonical structured latent (encoder→predictor→generator).",
+    )
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     def to_plain_text(self) -> str:
@@ -155,6 +193,22 @@ def format_account_brief_plain_text(brief: AccountBrief) -> str:
         lines.append(f"- {ap.summary_line}")
         if ap.portfolio_updated_at:
             lines.append(f"- Portfolio updated: {ap.portfolio_updated_at}")
+        lines.append("")
+
+    if brief.shopfloor_truth is not None and (
+        brief.shopfloor_truth.display_label or brief.shopfloor_truth.status == "contradiction"
+    ):
+        sf = brief.shopfloor_truth
+        lines.append("Shopfloor truth (relationship label)")
+        if sf.display_label:
+            lines.append(f"- Treat as: {sf.display_label}")
+        if sf.status == "contradiction":
+            lines.append(
+                f"- CONTRADICTION: CRM stage {sf.crm_stage or '(none)'} vs Atlas "
+                f"{sf.atlas_relation} — do not call this a lead/prospect"
+            )
+        if sf.detail and sf.status == "contradiction":
+            lines.append(f"- {sf.detail}")
         lines.append("")
 
     if brief.crm is not None:
@@ -229,6 +283,13 @@ def format_account_brief_plain_text(brief: AccountBrief) -> str:
         for r in brief.risks_gaps[:8]:
             lines.append(f"- {r}")
         lines.append("")
+
+    if brief.evidence_legs:
+        from brain_os.services.evidence_freshness import format_evidence_freshness_block
+
+        block = format_evidence_freshness_block(brief.evidence_legs)
+        if block:
+            lines.extend([block, ""])
 
     if brief.math_advisory is not None:
         m = brief.math_advisory

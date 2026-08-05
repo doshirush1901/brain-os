@@ -8,6 +8,7 @@ from typing import Any
 from brain_os.brain.company_similarity import find_similar_companies
 from brain_os.brain.context_graph_expand import format_expansion_lines
 from brain_os.brain.knowledge_graph import KnowledgeGraph, normalize_entity_name
+from brain_os.brain.knowledge_graph_text import company_name_key
 from brain_os.exceptions import DatabaseError
 from brain_os.schemas.account_brief import AccountBrief
 from brain_os.schemas.company_context_graph import CompanyContextGraphBundle
@@ -57,11 +58,13 @@ async def fetch_company_context_graph(
 
         props_rows = await kg._read(
             """
-            MATCH (c:Company {name: $name})
+            MATCH (c:Company)
+            WHERE c.name_key = $key OR c.name = $name
             RETURN c.region AS region, c.industry AS industry, c.website AS website
             LIMIT 1
             """,
             name=name,
+            key=company_name_key(name),
         )
         if props_rows:
             row = props_rows[0]

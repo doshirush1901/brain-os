@@ -10,18 +10,25 @@ embedding generation.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import re
 import time
 from collections.abc import Awaitable, Callable, Sequence
+from types import SimpleNamespace
 from typing import Any, TypeVar
 from uuid import UUID
 
 import httpx
 from qdrant_client import AsyncQdrantClient, models
-from qdrant_client.http.exceptions import UnexpectedResponse
+from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 
 from brain_os.brain.embeddings import EmbeddingService
+from brain_os.brain.qdrant_mirror_upsert import (
+    upsert_points_with_backoff,
+    vector_for_mirror_upsert,
+)
+from brain_os.brain.qdrant_search_payload import SEARCH_PAYLOAD_FIELDS as _SEARCH_PAYLOAD_FIELDS
 from brain_os.config import QdrantConfig, get_settings
 from brain_os.data.models import KnowledgeItem
 from brain_os.exceptions import DatabaseError, BrainOSError, LLMError
@@ -31,9 +38,19 @@ logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
 
+# Re-export for API / test stability (L0.1 peel).
+_vector_for_mirror_upsert = vector_for_mirror_upsert
+
 # Typed groups for Qdrant / embedding call sites (BLE001 narrowing).
 _QDRANT_INIT_ERRORS = (httpx.HTTPError, OSError, ValueError, TypeError, UnexpectedResponse)
-_QDRANT_HTTP_IO_ERRORS = (httpx.HTTPError, OSError, UnexpectedResponse, TypeError, AttributeError)
+_QDRANT_HTTP_IO_ERRORS = (
+    httpx.HTTPError,
+    OSError,
+    UnexpectedResponse,
+    ResponseHandlingException,
+    TypeError,
+    AttributeError,
+)
 _QDRANT_STORE_ERRORS = (
     DatabaseError,
     httpx.HTTPError,
@@ -53,34 +70,41 @@ _CLOUD_UPSERT_BATCH_SIZE = 50
 # of 4 keeps throughput high while avoiding connection drops.
 _MAX_CONCURRENT_SEARCHES = 4
 
-# Payload fields returned by search/hybrid_search.  Fetching only these avoids
-# transferring large raw payloads over the network — critical for Qdrant Cloud
-# where full-payload responses can be 10-30x slower than selective ones.
-_SEARCH_PAYLOAD_FIELDS: list[str] = [
-    "content",
-    "text",
-    "raw_text",
-    "source",
-    "filename",
-    "source_category",
-    "doc_type",
-    "metadata",
-    "machines",
-    "prices",
-    "customer",
-    "chunk",
-    "total_chunks",
-    "source_group",
-    "ingested_at",
-    "subject",
-    "from_email",
-    "to_email",
+# Payload keys that carry retrieval signals; always surfaced in result metadata
+# even when the point has its own ``metadata`` dict (backfilled email corpus).
+_SIGNAL_PAYLOAD_KEYS = (
+    "has_quote",
+    "has_price",
     "direction",
     "thread_key",
     "company_domain",
-    "has_quote",
-    "has_price",
-]
+    "canonical_company",
+    "email_date",
+    "content_hash",
+    "embedding_model",
+    "ingest_version",
+)
+
+
+def _low_trust_exclusion() -> models.Filter:
+    """Filter that hides points tagged ``trust: low`` (base64 blobs, marketing mail)."""
+    return models.Filter(
+        must_not=[models.FieldCondition(key="trust", match=models.MatchValue(value="low"))]
+    )
+
+
+def _merge_low_trust_exclusion(existing: models.Filter | None) -> models.Filter:
+    if existing is None:
+        return _low_trust_exclusion()
+    must_not = list(existing.must_not or [])
+    must_not.append(models.FieldCondition(key="trust", match=models.MatchValue(value="low")))
+    return models.Filter(
+        must=existing.must,
+        should=existing.should,
+        must_not=must_not,
+        min_should=getattr(existing, "min_should", None),
+    )
+
 
 _ENTITY_SUFFIXES = re.compile(
     r",?\s*\b(Inc\.?|LLC|Ltd\.?|Corp\.?|Co\.?|PLC|GmbH|SA|AG|NV|BV)\s*$",
@@ -99,7 +123,11 @@ def _slug_token(value: str, *, fallback: str = "unknown") -> str:
     return token or fallback
 
 
-def _canonicalize_payload(item: KnowledgeItem) -> dict[str, Any]:
+def _canonicalize_payload(
+    item: KnowledgeItem,
+    *,
+    embedding_model: str = "",
+) -> dict[str, Any]:
     metadata = dict(item.metadata or {})
     source = str(item.source or "").strip()
     source_category = _slug_token(str(item.source_category or ""), fallback="unknown")
@@ -120,6 +148,20 @@ def _canonicalize_payload(item: KnowledgeItem) -> dict[str, Any]:
         company_id = f"company::{_slug_token(canonical_company)}"
         metadata.setdefault("canonical_company", canonical_company)
         metadata.setdefault("company_id", company_id)
+
+    from brain_os.brain.email_text_cleaner import content_hash as _content_hash
+
+    ch = str(metadata.get("content_hash") or "").strip() or _content_hash(item.content)
+    metadata["content_hash"] = ch
+    model_name = (
+        str(metadata.get("embedding_model") or embedding_model or "").strip() or embedding_model
+    )
+    if model_name:
+        metadata["embedding_model"] = model_name
+    ingest_version = str(metadata.get("ingest_version") or "").strip()
+    if ingest_version:
+        metadata["ingest_version"] = ingest_version
+
     payload = {
         "content": item.content,
         "source": source,
@@ -127,12 +169,66 @@ def _canonicalize_payload(item: KnowledgeItem) -> dict[str, Any]:
         "doc_type": doc_type,
         "metadata": metadata,
         "created_at": item.created_at.isoformat(),
+        "content_hash": ch,
     }
+    if model_name:
+        payload["embedding_model"] = model_name
+    if ingest_version:
+        payload["ingest_version"] = ingest_version
     if canonical_company:
         payload["canonical_company"] = canonical_company
     if company_id:
         payload["company_id"] = company_id
+    email_date = metadata.get("email_date") or payload.get("email_date")
+    if email_date:
+        payload["email_date"] = str(email_date)
+    from brain_os.brain.qdrant_payload_hygiene import classify_payload
+
+    hygiene_updates, _ = classify_payload(payload)
+    payload.update(hygiene_updates)
+    if payload.get("email_date"):
+        payload["email_date"] = str(payload["email_date"])[:32]
     return payload
+
+
+def _merge_entity_filter(
+    existing: models.Filter | None,
+    *,
+    entity_id: str | None = None,
+    company: str | None = None,
+) -> models.Filter | None:
+    """Narrow hybrid search to points tagged with a graph entity id."""
+    eid = (entity_id or "").strip()
+    if not eid and company:
+        from brain_os.brain.knowledge_graph_text import company_name_key
+
+        key = company_name_key(_normalize_company_name(company))
+        if key:
+            eid = f"Company:{key}"
+    if not eid:
+        return existing
+    entity_cond = models.Filter(
+        should=[
+            models.FieldCondition(
+                key="metadata.graph_entity_ids",
+                match=models.MatchValue(value=eid),
+            ),
+            models.FieldCondition(
+                key="graph_entity_ids",
+                match=models.MatchValue(value=eid),
+            ),
+        ]
+    )
+    if existing is None:
+        return entity_cond
+    must = list(existing.must or [])
+    must.append(entity_cond)
+    return models.Filter(
+        must=must,
+        should=existing.should,
+        must_not=existing.must_not,
+        min_should=getattr(existing, "min_should", None),
+    )
 
 
 def _is_collection_not_found_error(exc: Exception) -> bool:
@@ -207,12 +303,24 @@ class QdrantManager:
         self._embeddings = embedding_service
         self._config: QdrantConfig = cfg
         app = get_settings().app
-        self._use_sparse_hybrid = getattr(app, "use_sparse_hybrid", False)
+        # Permanent hybrid authority (docs/RETRIEVAL.md) — prefer hybrid name always.
+        self._use_sparse_hybrid = bool(getattr(app, "use_sparse_hybrid", True))
         self._default_collection = (
-            cfg.collection_hybrid if self._use_sparse_hybrid else cfg.collection
+            (cfg.collection_hybrid or cfg.collection) if self._use_sparse_hybrid else cfg.collection
+        )
+        fusion_mode = str(getattr(app, "hybrid_fusion_mode", "weighted") or "weighted").lower()
+        self._hybrid_fusion_mode = "rrf" if fusion_mode == "rrf" else "weighted"
+        self._hybrid_dense_weight = float(getattr(app, "hybrid_dense_weight", 0.8) or 0.8)
+        self._hybrid_sparse_weight = float(getattr(app, "hybrid_sparse_weight", 0.2) or 0.2)
+        self._hybrid_code_dense_weight = float(
+            getattr(app, "hybrid_code_dense_weight", 0.35) or 0.35
+        )
+        self._hybrid_code_sparse_weight = float(
+            getattr(app, "hybrid_code_sparse_weight", 0.65) or 0.65
         )
         self._event_bus = event_bus
         self._search_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_SEARCHES)
+        self._last_scroll_offset: models.PointId | None = None
         self._attach_clients(cfg)
 
     def _attach_clients(self, cfg: QdrantConfig) -> None:
@@ -333,6 +441,14 @@ class QdrantManager:
         ("thread_key", "keyword"),
         ("has_quote", "bool"),
         ("has_price", "bool"),
+        ("trust", "keyword"),
+        ("email_date", "datetime"),
+        ("created_at", "datetime"),
+        ("content_hash", "keyword"),
+        ("embedding_model", "keyword"),
+        ("ingest_version", "keyword"),
+        ("metadata.graph_entity_ids", "keyword"),
+        ("graph_entity_ids", "keyword"),
     ]
 
     async def ensure_collection(
@@ -443,11 +559,14 @@ class QdrantManager:
             if field in existing:
                 continue
             try:
-                schema = (
-                    models.PayloadSchemaType.KEYWORD
-                    if schema_type == "keyword"
-                    else models.PayloadSchemaType.BOOL
-                )
+                if schema_type == "keyword":
+                    schema: Any = models.PayloadSchemaType.KEYWORD
+                elif schema_type == "bool":
+                    schema = models.PayloadSchemaType.BOOL
+                elif schema_type == "datetime":
+                    schema = models.PayloadSchemaType.DATETIME
+                else:
+                    schema = models.PayloadSchemaType.KEYWORD
                 await client.create_payload_index(
                     collection_name=collection,
                     field_name=field,
@@ -466,6 +585,18 @@ class QdrantManager:
 
     # ── upsert ───────────────────────────────────────────────────────────
 
+    async def _content_hash_exists(
+        self,
+        content_hash: str,
+        collection: str | None = None,
+    ) -> bool:
+        """Return True when a point with this ``content_hash`` already exists."""
+        ch = (content_hash or "").strip()
+        if not ch:
+            return False
+        existing = await self.find_existing_content_hashes([ch], collection=collection)
+        return ch in existing
+
     async def upsert_items(
         self,
         items: Sequence[KnowledgeItem],
@@ -480,7 +611,63 @@ class QdrantManager:
         if not items:
             return 0
 
+        from brain_os.brain.qdrant_payload_hygiene import filter_knowledge_items_for_ingest
+
+        items_list = list(items)
+        items_list, rejected = filter_knowledge_items_for_ingest(items_list)
+        if rejected:
+            logger.info(
+                "Hygiene ingest gate skipped %d/%d chunks before embed",
+                rejected,
+                len(items),
+            )
+        if not items_list:
+            return 0
+
         col = collection or self._default_collection
+        model_name = getattr(self._embeddings, "model", None) or ""
+        from brain_os.brain.email_text_cleaner import content_hash as _content_hash
+
+        stamped: list[KnowledgeItem] = []
+        hashes: list[str] = []
+        seen_in_batch: set[str] = set()
+        batch_dupes = 0
+        for item in items_list:
+            meta = dict(item.metadata or {})
+            ch = str(meta.get("content_hash") or "").strip() or _content_hash(item.content)
+            if ch in seen_in_batch:
+                batch_dupes += 1
+                continue
+            seen_in_batch.add(ch)
+            meta["content_hash"] = ch
+            if model_name:
+                meta["embedding_model"] = str(meta.get("embedding_model") or model_name)
+            item.metadata = meta
+            stamped.append(item)
+            hashes.append(ch)
+        if batch_dupes:
+            logger.info("Chunk content_hash dedupe dropped %d in-batch duplicates", batch_dupes)
+
+        existing = await self.find_existing_content_hashes(hashes, collection=col)
+        if existing:
+            before = len(stamped)
+            stamped = [
+                it
+                for it in stamped
+                if str((it.metadata or {}).get("content_hash") or "") not in existing
+            ]
+            skipped = before - len(stamped)
+            if skipped:
+                logger.info(
+                    "Chunk content_hash dedupe skipped %d/%d (already in '%s')",
+                    skipped,
+                    before,
+                    col,
+                )
+        if not stamped:
+            return 0
+        items = stamped
+
         texts = [item.content for item in items]
 
         try:
@@ -495,7 +682,7 @@ class QdrantManager:
             points = []
             for item, vector in zip(items, vectors):
                 indices, values = text_to_sparse(item.content)
-                payload = _canonicalize_payload(item)
+                payload = _canonicalize_payload(item, embedding_model=model_name)
                 points.append(
                     models.PointStruct(
                         id=_uuid_to_hex(item.id),
@@ -514,7 +701,7 @@ class QdrantManager:
                 models.PointStruct(
                     id=_uuid_to_hex(item.id),
                     vector=vector,
-                    payload=_canonicalize_payload(item),
+                    payload=_canonicalize_payload(item, embedding_model=model_name),
                 )
                 for item, vector in zip(items, vectors)
             ]
@@ -673,6 +860,7 @@ class QdrantManager:
                             using="dense",
                             limit=limit,
                             score_threshold=score_threshold,
+                            query_filter=_low_trust_exclusion(),
                             with_payload=_SEARCH_PAYLOAD_FIELDS,
                         )
                     return await c.query_points(
@@ -680,6 +868,7 @@ class QdrantManager:
                         query=query_vector,
                         limit=limit,
                         score_threshold=score_threshold,
+                        query_filter=_low_trust_exclusion(),
                         with_payload=_SEARCH_PAYLOAD_FIELDS,
                     )
 
@@ -698,12 +887,16 @@ class QdrantManager:
         limit: int = 10,
         keyword_filter: models.Filter | None = None,
         source_category: str | None = None,
+        entity_id: str | None = None,
+        company: str | None = None,
     ) -> list[dict[str, Any]]:
         """Dense vector search combined with Qdrant payload filtering.
 
         If *source_category* is provided a ``must`` match condition is
         built automatically.  For more complex predicates pass a full
         :class:`qdrant_client.models.Filter` via *keyword_filter*.
+
+        Optional *entity_id* / *company* filter on ``metadata.graph_entity_ids``.
         """
         col = collection or self._default_collection
 
@@ -721,6 +914,13 @@ class QdrantManager:
                 ]
             )
 
+        keyword_filter = _merge_entity_filter(
+            keyword_filter,
+            entity_id=entity_id,
+            company=company,
+        )
+        keyword_filter = _merge_low_trust_exclusion(keyword_filter)
+
         async with self._search_semaphore:
             query_vector = await self._embeddings.embed_query(query)
             si, sv = ([], [])
@@ -729,23 +929,37 @@ class QdrantManager:
 
                 si, sv = text_to_sparse(query)
 
+            prefetch_limit = max(limit * 3, limit)
+
             async def _hybrid_qp(
                 c: AsyncQdrantClient,
                 qf: models.Filter | None = keyword_filter,
             ) -> Any:
-                if self._use_sparse_hybrid:
+                if not self._use_sparse_hybrid or not si:
+                    kwargs: dict[str, Any] = {
+                        "collection_name": col,
+                        "query": query_vector,
+                        "query_filter": qf,
+                        "limit": limit,
+                        "with_payload": _SEARCH_PAYLOAD_FIELDS,
+                    }
+                    if self._use_sparse_hybrid:
+                        kwargs["using"] = "dense"
+                    return await c.query_points(**kwargs)
+                # Legacy server-side RRF (A/B only).
+                if self._hybrid_fusion_mode == "rrf":
                     return await c.query_points(
                         collection_name=col,
                         prefetch=[
                             models.Prefetch(
                                 query=models.SparseVector(indices=si, values=sv),
                                 using="sparse",
-                                limit=limit * 2,
+                                limit=prefetch_limit,
                             ),
                             models.Prefetch(
                                 query=query_vector,
                                 using="dense",
-                                limit=limit * 2,
+                                limit=prefetch_limit,
                             ),
                         ],
                         query=models.FusionQuery(fusion=models.Fusion.RRF),
@@ -753,13 +967,39 @@ class QdrantManager:
                         limit=limit,
                         with_payload=_SEARCH_PAYLOAD_FIELDS,
                     )
-                return await c.query_points(
-                    collection_name=col,
-                    query=query_vector,
-                    query_filter=qf,
-                    limit=limit,
-                    with_payload=_SEARCH_PAYLOAD_FIELDS,
+                # Score-weighted fusion (default): dense + sparse queried separately.
+                from brain_os.brain.hybrid_fusion import fuse_hits
+
+                dense_r, sparse_r = await asyncio.gather(
+                    c.query_points(
+                        collection_name=col,
+                        query=query_vector,
+                        using="dense",
+                        query_filter=qf,
+                        limit=prefetch_limit,
+                        with_payload=_SEARCH_PAYLOAD_FIELDS,
+                    ),
+                    c.query_points(
+                        collection_name=col,
+                        query=models.SparseVector(indices=si, values=sv),
+                        using="sparse",
+                        query_filter=qf,
+                        limit=prefetch_limit,
+                        with_payload=_SEARCH_PAYLOAD_FIELDS,
+                    ),
                 )
+                fused = fuse_hits(
+                    list(dense_r.points or []),
+                    list(sparse_r.points or []),
+                    mode="weighted",
+                    dense_weight=self._hybrid_dense_weight,
+                    sparse_weight=self._hybrid_sparse_weight,
+                    code_dense_weight=self._hybrid_code_dense_weight,
+                    code_sparse_weight=self._hybrid_code_sparse_weight,
+                    query=str(query or ""),
+                    limit=limit,
+                )
+                return SimpleNamespace(points=fused)
 
             try:
                 result = await self._run_with_fallback(
@@ -877,7 +1117,6 @@ class QdrantManager:
                 ),
             ]
         )
-        out: list[tuple[str, dict[str, Any]]] = []
 
         async def _scroll_cat(c: AsyncQdrantClient) -> list[tuple[str, dict[str, Any]]]:
             rows: list[tuple[str, dict[str, Any]]] = []
@@ -941,9 +1180,7 @@ class QdrantManager:
                 # Rebuild PointStruct for cloud upsert (id, vector, payload)
                 batch = []
                 for pt in points:
-                    vec = pt.vector
-                    if isinstance(vec, dict):
-                        vec = vec.get("") or (list(vec.values())[0] if vec else None)
+                    vec = _vector_for_mirror_upsert(pt.vector)
                     if vec is None:
                         continue
                     batch.append(
@@ -953,10 +1190,15 @@ class QdrantManager:
                             payload=pt.payload or {},
                         )
                     )
-                # Upsert to cloud in smaller chunks to stay under request size limits
+                # Upsert to cloud in smaller chunks to stay under request size limits.
                 for sub_start in range(0, len(batch), _CLOUD_UPSERT_BATCH_SIZE):
                     sub = batch[sub_start : sub_start + _CLOUD_UPSERT_BATCH_SIZE]
-                    await self._client_cloud.upsert(collection_name=col, points=sub)
+                    await upsert_points_with_backoff(
+                        self._client_cloud,
+                        collection_name=col,
+                        points=sub,
+                        http_io_errors=_QDRANT_HTTP_IO_ERRORS,
+                    )
                 total += len(batch)
                 logger.info("Synced %d points to cloud (total so far: %d)", len(batch), total)
                 if progress_callback is not None:
@@ -969,6 +1211,61 @@ class QdrantManager:
             logger.exception("sync_collection_to_cloud failed")
             raise
         return total
+
+    async def sync_point_ids_to_mirror(
+        self,
+        point_ids: Sequence[str],
+        collection: str | None = None,
+        *,
+        batch_size: int = 50,
+    ) -> int:
+        """Copy specific points from primary Qdrant to the mirror client.
+
+        Use after ``brain graph reconcile-qdrant`` to refresh local fallback with
+        only the chunk IDs Neo4j still references (much faster than full scroll).
+        """
+        if self._client_cloud is None or not point_ids:
+            return 0
+        col = collection or self._default_collection
+        await self.ensure_collection(name=col)
+        synced = 0
+        ids = [str(pid).strip() for pid in point_ids if str(pid).strip()]
+        step = max(1, min(batch_size, _CLOUD_UPSERT_BATCH_SIZE))
+        try:
+            for start in range(0, len(ids), step):
+                batch_ids = ids[start : start + step]
+
+                async def _retrieve(c: AsyncQdrantClient, ids_batch: list[str] = batch_ids) -> Any:
+                    return await c.retrieve(
+                        collection_name=col,
+                        ids=ids_batch,
+                        with_payload=True,
+                        with_vectors=True,
+                    )
+
+                points = await self._run_with_fallback("sync_mirror_retrieve", _retrieve)
+                if not points:
+                    continue
+                upsert_batch: list[models.PointStruct] = []
+                for pt in points:
+                    vec = _vector_for_mirror_upsert(pt.vector)
+                    if vec is None:
+                        continue
+                    upsert_batch.append(
+                        models.PointStruct(
+                            id=pt.id,
+                            vector=vec,
+                            payload=pt.payload or {},
+                        )
+                    )
+                if upsert_batch:
+                    await self._client_cloud.upsert(collection_name=col, points=upsert_batch)
+                    synced += len(upsert_batch)
+        except _QDRANT_STORE_ERRORS:
+            logger.exception("sync_point_ids_to_mirror failed")
+            raise
+        logger.info("Synced %d point(s) to Qdrant mirror", synced)
+        return synced
 
     async def create_staging_collection(
         self,
@@ -1051,6 +1348,92 @@ class QdrantManager:
             except _QDRANT_HTTP_IO_ERRORS:
                 logger.warning("Cloud alias swap failed for '%s'", alias_name, exc_info=True)
 
+    async def count_scroll_targets(
+        self,
+        *,
+        source_category: str | None = None,
+        require_graph_entity_ids: bool = False,
+        exclude_graph_entity_ids: bool = False,
+        collection: str | None = None,
+    ) -> int:
+        """Count points matching the same filter used by ``scroll_collection_payloads``."""
+        col = collection or self._default_collection
+        scroll_filter = self._scroll_payload_filter(
+            source_category=source_category,
+            require_graph_entity_ids=require_graph_entity_ids,
+            exclude_graph_entity_ids=exclude_graph_entity_ids,
+        )
+
+        async def _count(c: AsyncQdrantClient) -> int:
+            result = await c.count(
+                collection_name=col,
+                count_filter=scroll_filter,
+                exact=True,
+            )
+            return int(result.count)
+
+        try:
+            return await self._run_with_fallback("count_scroll_targets", _count)
+        except _QDRANT_STORE_ERRORS:
+            logger.warning("count_scroll_targets failed", exc_info=True)
+            return 0
+
+    @staticmethod
+    def _scroll_payload_filter(
+        *,
+        source_category: str | None = None,
+        require_graph_entity_ids: bool = False,
+        exclude_graph_entity_ids: bool = False,
+    ) -> models.Filter | None:
+        """Build scroll filter for category and/or ``graph_entity_ids`` presence."""
+        if require_graph_entity_ids and exclude_graph_entity_ids:
+            raise ValueError(
+                "require_graph_entity_ids and exclude_graph_entity_ids are mutually exclusive"
+            )
+        must: list[models.Filter] = []
+        must_not: list[models.Filter] = []
+        if source_category:
+            must.append(
+                models.Filter(
+                    should=[
+                        models.FieldCondition(
+                            key="source_category",
+                            match=models.MatchValue(value=source_category),
+                        ),
+                        models.FieldCondition(
+                            key="doc_type",
+                            match=models.MatchValue(value=source_category),
+                        ),
+                    ]
+                )
+            )
+        entity_ids_should = [
+            models.FieldCondition(
+                key="metadata.graph_entity_ids",
+                is_empty=False,
+            ),
+            models.FieldCondition(
+                key="graph_entity_ids",
+                is_empty=False,
+            ),
+        ]
+        if require_graph_entity_ids:
+            must.append(models.Filter(should=entity_ids_should))
+        if exclude_graph_entity_ids:
+            must_not.append(models.Filter(should=entity_ids_should))
+        if not must and not must_not:
+            return None
+        if len(must) == 1 and not must_not:
+            return must[0]
+        if len(must_not) == 1 and not must:
+            return models.Filter(must_not=must_not)
+        filter_kwargs: dict[str, list[models.Filter]] = {}
+        if must:
+            filter_kwargs["must"] = must
+        if must_not:
+            filter_kwargs["must_not"] = must_not
+        return models.Filter(**filter_kwargs)
+
     async def scroll_collection_payloads(
         self,
         collection: str | None = None,
@@ -1059,28 +1442,27 @@ class QdrantManager:
         max_points: int | None = None,
         source_category: str | None = None,
         start_after_point_id: str | None = None,
+        require_graph_entity_ids: bool = False,
+        exclude_graph_entity_ids: bool = False,
     ):
         """Async generator: scroll collection and yield batches of payload dicts.
 
         Does not load vectors. Optional filter by source_category (or doc_type).
+        When ``require_graph_entity_ids`` is true, only points with non-empty
+        ``metadata.graph_entity_ids`` or top-level ``graph_entity_ids`` are scrolled.
+        When ``exclude_graph_entity_ids`` is true, only points *without* those ids
+        are scrolled (inverse of fast-link filter).
         Each item includes "point_id", "content", "source", "source_category", "payload".
         If start_after_point_id is set, scrolling starts after that point (for resume).
         """
         col = collection or self._default_collection
-        scroll_filter: models.Filter | None = None
-        if source_category:
-            scroll_filter = models.Filter(
-                should=[
-                    models.FieldCondition(
-                        key="source_category",
-                        match=models.MatchValue(value=source_category),
-                    ),
-                    models.FieldCondition(
-                        key="doc_type",
-                        match=models.MatchValue(value=source_category),
-                    ),
-                ]
-            )
+        use_entity_filter = require_graph_entity_ids
+        use_entity_exclude_filter = exclude_graph_entity_ids
+        scroll_filter = self._scroll_payload_filter(
+            source_category=source_category,
+            require_graph_entity_ids=use_entity_filter,
+            exclude_graph_entity_ids=use_entity_exclude_filter,
+        )
 
         def _is_retryable_scroll_error(exc: Exception) -> bool:
             if isinstance(exc, (httpx.ConnectError, httpx.TimeoutException)):
@@ -1097,6 +1479,7 @@ class QdrantManager:
         scroll_retry = RetryPolicy(max_attempts=5, base_delay_seconds=2.0)
         total_yielded = 0
         offset: models.PointId | None = start_after_point_id if start_after_point_id else None
+        self._last_scroll_offset = offset
         try:
             while True:
 
@@ -1115,11 +1498,34 @@ class QdrantManager:
 
                     return await self._run_with_fallback("scroll_collection_payloads", _sc)
 
-                points, offset = await run_with_retry(
-                    _do_scroll,
-                    policy=scroll_retry,
-                    is_retryable=_is_retryable_scroll_error,
-                )
+                try:
+                    points, offset = await run_with_retry(
+                        _do_scroll,
+                        policy=scroll_retry,
+                        is_retryable=_is_retryable_scroll_error,
+                    )
+                except _QDRANT_STORE_ERRORS:
+                    if use_entity_filter or use_entity_exclude_filter:
+                        logger.warning(
+                            "Scroll with graph_entity_ids filter failed on '%s' — "
+                            "retrying without entity filter (client-side skip still applies)",
+                            col,
+                            exc_info=True,
+                        )
+                        use_entity_filter = False
+                        use_entity_exclude_filter = False
+                        scroll_filter = self._scroll_payload_filter(
+                            source_category=source_category,
+                            require_graph_entity_ids=False,
+                            exclude_graph_entity_ids=False,
+                        )
+                        points, offset = await run_with_retry(
+                            _do_scroll,
+                            policy=scroll_retry,
+                            is_retryable=_is_retryable_scroll_error,
+                        )
+                    else:
+                        raise
                 batch: list[dict[str, Any]] = []
                 for pt in points:
                     payload = pt.payload or {}
@@ -1140,7 +1546,9 @@ class QdrantManager:
                     yield batch
                     total_yielded += len(batch)
                     if max_points is not None and total_yielded >= max_points:
+                        self._last_scroll_offset = offset
                         break
+                self._last_scroll_offset = offset
                 if offset is None or not points:
                     break
         except _QDRANT_STORE_ERRORS:
@@ -1148,6 +1556,191 @@ class QdrantManager:
             raise
 
     # ── deletion ─────────────────────────────────────────────────────────
+
+    async def find_existing_content_hashes(
+        self,
+        hashes: Sequence[str],
+        collection: str | None = None,
+    ) -> set[str]:
+        """Return the subset of *hashes* that already exist in the collection."""
+        wanted = {h.strip() for h in hashes if h and str(h).strip()}
+        if not wanted:
+            return set()
+        col = collection or self._default_collection
+        found: set[str] = set()
+        batch = list(wanted)
+        step = 50
+        for i in range(0, len(batch), step):
+            chunk = batch[i : i + step]
+            try:
+
+                async def _scroll_hashes(
+                    c: AsyncQdrantClient, values: list[str] = chunk
+                ) -> list[Any]:
+                    points, _offset = await c.scroll(
+                        collection_name=col,
+                        scroll_filter=models.Filter(
+                            must=[
+                                models.FieldCondition(
+                                    key="content_hash",
+                                    match=models.MatchAny(any=values),
+                                )
+                            ]
+                        ),
+                        limit=len(values) + 10,
+                        with_payload=["content_hash"],
+                        with_vectors=False,
+                    )
+                    return list(points or [])
+
+                points = await self._run_with_fallback(f"find_content_hashes@{i}", _scroll_hashes)
+                for pt in points:
+                    pl = getattr(pt, "payload", None) or {}
+                    ch = str(pl.get("content_hash") or "").strip()
+                    if ch in wanted:
+                        found.add(ch)
+            except _QDRANT_STORE_ERRORS:
+                logger.debug("content_hash existence check failed", exc_info=True)
+                return set()
+        return found
+
+    async def delete_points(
+        self,
+        point_ids: Sequence[str],
+        collection: str | None = None,
+    ) -> int:
+        """Delete points by ID. Returns the number of IDs submitted for deletion."""
+        ids = [str(pid).strip() for pid in point_ids if str(pid).strip()]
+        if not ids:
+            return 0
+        col = collection or self._default_collection
+        deleted = 0
+        step = 100
+        for i in range(0, len(ids), step):
+            batch = ids[i : i + step]
+            try:
+
+                async def _del(c: AsyncQdrantClient, pts: list[str] = batch) -> None:
+                    await c.delete(
+                        collection_name=col,
+                        points_selector=models.PointIdsList(points=pts),
+                    )
+
+                await self._run_with_fallback(f"delete_points@{i}", _del)
+                deleted += len(batch)
+            except _QDRANT_STORE_ERRORS:
+                logger.exception("delete_points failed at offset %d", i)
+                raise
+        return deleted
+
+    async def update_sparse_vectors(
+        self,
+        updates: Sequence[tuple[str, list[int], list[float]]],
+        collection: str | None = None,
+    ) -> int:
+        """Sparse-only vector update (no dense re-embed). Returns points submitted."""
+        col = collection or self._default_collection
+        if not updates:
+            return 0
+        submitted = 0
+        step = 64
+        for i in range(0, len(updates), step):
+            batch = updates[i : i + step]
+            points = [
+                models.PointVectors(
+                    id=pid,
+                    vector={
+                        "sparse": models.SparseVector(indices=indices, values=values),
+                    },
+                )
+                for pid, indices, values in batch
+                if indices
+            ]
+            if not points:
+                continue
+            try:
+
+                async def _upd(c: AsyncQdrantClient, pts: list[Any] = points) -> None:
+                    await c.update_vectors(collection_name=col, points=pts)
+
+                await self._run_with_fallback(f"update_sparse@{i}", _upd)
+                submitted += len(points)
+            except _QDRANT_STORE_ERRORS:
+                logger.exception("update_sparse_vectors failed at offset %d", i)
+                raise
+        return submitted
+
+    async def regenerate_sparse_vectors(
+        self,
+        *,
+        collection: str | None = None,
+        batch_size: int = 128,
+        max_points: int | None = None,
+        dry_run: bool = False,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> dict[str, Any]:
+        """Recompute sparse vectors for every point from payload content (no Voyage)."""
+        from brain_os.brain.sparse_vectors import text_to_sparse
+
+        col = collection or self._default_collection
+        scanned = 0
+        updated = 0
+        would_update = 0
+        skipped_empty = 0
+        offset: models.PointId | None = None
+        while True:
+            if max_points is not None and scanned >= max_points:
+                break
+            limit = batch_size
+            if max_points is not None:
+                limit = min(batch_size, max_points - scanned)
+
+            async def _scroll(
+                c: AsyncQdrantClient,
+                off: models.PointId | None = offset,
+                lim: int = limit,
+            ) -> tuple[list[Any], models.PointId | None]:
+                points, nxt = await c.scroll(
+                    collection_name=col,
+                    limit=lim,
+                    offset=off,
+                    with_payload=["content", "text", "raw_text"],
+                    with_vectors=False,
+                )
+                return list(points or []), nxt
+
+            try:
+                points, offset = await self._run_with_fallback("sparse_regen_scroll", _scroll)
+            except _QDRANT_STORE_ERRORS:
+                logger.exception("sparse regen scroll failed")
+                raise
+            if not points:
+                break
+            scanned += len(points)
+            batch_updates: list[tuple[str, list[int], list[float]]] = []
+            for pt in points:
+                pl = getattr(pt, "payload", None) or {}
+                text = str(pl.get("content") or pl.get("text") or pl.get("raw_text") or "")
+                indices, values = text_to_sparse(text)
+                if not indices:
+                    skipped_empty += 1
+                    continue
+                batch_updates.append((str(pt.id), indices, values))
+            would_update += len(batch_updates)
+            if batch_updates and not dry_run:
+                updated += await self.update_sparse_vectors(batch_updates, collection=col)
+            if progress_callback is not None:
+                progress_callback(scanned, updated if not dry_run else would_update)
+            if offset is None:
+                break
+        return {
+            "collection": col,
+            "scanned": scanned,
+            "updated": updated,
+            "would_update": would_update,
+            "skipped_empty": skipped_empty,
+            "dry_run": dry_run,
+        }
 
     async def delete_by_source(
         self,
@@ -1220,6 +1813,60 @@ class QdrantManager:
             )
             raise
 
+    async def count_trust_low(self, collection: str | None = None) -> int:
+        """Count points tagged ``trust: low``."""
+        col = collection or self._default_collection
+        try:
+
+            async def _count(c: AsyncQdrantClient) -> int:
+                result = await c.count(
+                    collection_name=col,
+                    count_filter=models.Filter(
+                        must=[
+                            models.FieldCondition(
+                                key="trust",
+                                match=models.MatchValue(value="low"),
+                            )
+                        ]
+                    ),
+                    exact=True,
+                )
+                return int(result.count)
+
+            return await self._run_with_fallback("count_trust_low", _count)
+        except _QDRANT_STORE_ERRORS:
+            logger.warning("count_trust_low failed", exc_info=True)
+            return 0
+
+    async def delete_by_trust_low(
+        self,
+        collection: str | None = None,
+    ) -> None:
+        """Delete all points whose payload has ``trust: low``."""
+        col = collection or self._default_collection
+        try:
+
+            async def _delete_low(c: AsyncQdrantClient) -> None:
+                await c.delete(
+                    collection_name=col,
+                    points_selector=models.FilterSelector(
+                        filter=models.Filter(
+                            must=[
+                                models.FieldCondition(
+                                    key="trust",
+                                    match=models.MatchValue(value="low"),
+                                )
+                            ]
+                        )
+                    ),
+                )
+
+            await self._run_with_fallback("delete_by_trust_low", _delete_low)
+            logger.info("Deleted trust=low points from '%s'", col)
+        except _QDRANT_STORE_ERRORS:
+            logger.exception("Failed to delete trust=low points")
+            raise
+
     # ── payload updates ─────────────────────────────────────────────────
 
     async def set_payload(
@@ -1227,6 +1874,8 @@ class QdrantManager:
         point_id: str,
         payload: dict[str, Any],
         collection: str | None = None,
+        *,
+        wait: bool = True,
     ) -> None:
         """Update payload fields on an existing point without re-embedding."""
         col = collection or self._default_collection
@@ -1237,6 +1886,7 @@ class QdrantManager:
                     collection_name=col,
                     payload=payload,
                     points=[point_id],
+                    wait=wait,
                 )
 
             await self._run_with_fallback("set_payload", _set_pay)
@@ -1337,6 +1987,11 @@ def _hit_to_dict(hit: models.ScoredPoint) -> dict[str, Any]:
             "has_price",
         }
         metadata = {k: v for k, v in payload.items() if k in extra_keys and v}
+    if isinstance(metadata, dict):
+        for key in _SIGNAL_PAYLOAD_KEYS:
+            value = payload.get(key)
+            if value and key not in metadata:
+                metadata[key] = value
 
     return {
         "id": str(hit.id),

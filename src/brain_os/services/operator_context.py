@@ -11,6 +11,7 @@ from brain_os.brain.context_graph_sync import sync_operator_context_run
 from brain_os.brain.knowledge_graph import normalize_entity_name
 from brain_os.brain.operator_context_store import (
     OperatorContextStore,
+    build_operator_context_store,
     new_operator_context_run_id,
     operator_context_enabled,
 )
@@ -94,7 +95,7 @@ async def fetch_context_precedents(
         return []
     lim = limit if limit is not None else int(get_settings().app.operator_context_precedent_limit)
     try:
-        st = store or OperatorContextStore()
+        st = store or build_operator_context_store()
         return await st.list_precedents(
             company_key=company_context_key(brief.company_name),
             domain=brief.domain,
@@ -176,7 +177,7 @@ async def record_operator_context(
         brief_snapshot=brief_snapshot,
     )
     try:
-        st = store or OperatorContextStore()
+        st = store or build_operator_context_store()
         await st.save(record)
         await sync_operator_context_run(record)
         rid = (pipeline_run_id or "").strip()
@@ -207,7 +208,7 @@ async def mark_operator_context_sent(
         return
     ck = company_context_key(company_name)
     try:
-        st = store or OperatorContextStore()
+        st = store or build_operator_context_store()
         run_id = await st.latest_run_id_for_company(ck, kind=kind)
         if run_id:
             await st.mark_success(run_id, outcome="sent", success=True)
@@ -294,7 +295,7 @@ async def mark_operator_context_from_feedback(
             logger.debug("mark_operator_context: company extract failed", exc_info=True)
 
     try:
-        st = OperatorContextStore()
+        st = build_operator_context_store()
         seen: set[str] = set()
         for oid in op_ids:
             if oid in seen:

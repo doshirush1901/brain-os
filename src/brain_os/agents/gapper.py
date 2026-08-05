@@ -207,6 +207,6 @@ class Gapper(BaseAgent):
             if corrections and len(corrections) > 50:
                 return f"{draft}\n\n---\n**Gap Resolution (by Gapper):**\n{corrections}"
             return draft
-        except Exception as exc:  # intentional — Gapper must return draft on resolution failure
+        except Exception:  # intentional — Gapper must return draft on resolution failure
             logger.exception("Gapper resolution failed")
             return draft

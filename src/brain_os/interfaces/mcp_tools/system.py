@@ -167,6 +167,7 @@ async def get_system_status() -> str:
         get_vendor_apis_public_snapshot,
         get_workspace_content_public_snapshot,
     )
+    from brain_os.services.harness_review import harness_health_public_snapshot
 
     def _pantheon_registry_snapshot() -> Any:
         from brain_os.pantheon import get_pantheon_registry_public_snapshot
@@ -177,7 +178,8 @@ async def get_system_status() -> str:
         result,
         snapshots=[
             ("pipeline_runtime", "Pipeline runtime", get_pipeline_runtime_public_snapshot),
-            ("metis_stability", "Metis", metis_stability_public_snapshot),
+            ("metis_stability", "Metis (response quality)", metis_stability_public_snapshot),
+            ("harness_governance", "Harness (governance)", harness_health_public_snapshot),
             ("agent_power_summary", "Agent power probe", power_levels_public_probe),
             ("email_operations", "Email ops", get_email_ops_public_snapshot),
             ("knowledge_store", "Knowledge store", get_knowledge_store_public_snapshot),

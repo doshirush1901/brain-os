@@ -65,6 +65,9 @@ Enable **brain-os** in Cursor **Settings → MCP**. Full guide: [MCP_SETUP.md](M
 
 | Goal | Doc |
 |:-----|:----|
+| Peer / friend path | [FRIEND_FORK.md](FRIEND_FORK.md) |
+| Build your KB | [BUILD_YOUR_KB.md](BUILD_YOUR_KB.md) |
+| Operator governance | [OPERATOR_GOVERNANCE.md](OPERATOR_GOVERNANCE.md) |
 | Private company fork | [FORK_GUIDE.md](FORK_GUIDE.md) |
 | Licensing / Pro | [LICENSING.md](LICENSING.md) |
 | Acme operator story | [examples/acme/journey.md](../examples/acme/journey.md) |
@@ -75,9 +78,11 @@ Enable **brain-os** in Cursor **Settings → MCP**. Full guide: [MCP_SETUP.md](M
 
 | Issue | Fix |
 |:------|:----|
-| Port 6379 in use | Stop other Redis or change port in `docker-compose.local.yml` |
-| `brain health` DB errors | `docker compose -f docker-compose.local.yml up -d` and retry |
+| Port **6379** in use (Redis) | Another stack often owns 6379. In `docker-compose.local.yml`, map Redis to host **6380** (`"6380:6379"`), set `REDIS_URL=redis://localhost:6380/0` in `.env`, then re-run bootstrap. |
+| Port 5432 / Neo4j clash | Stop the other compose stack or change host ports in `docker-compose.local.yml` and matching `.env` URIs. Neo4j in this compose is published on host **7688** (`NEO4J_URI=bolt://localhost:7688`). |
+| `brain health` DB errors | `docker compose -f docker-compose.local.yml up -d` and retry; confirm `DATABASE_URL` database name matches compose (`brain_crm` by default). |
 | MCP not listed in Cursor | Restart Cursor after editing `.cursor/mcp.json` |
 | Lock file busy | Only one `brain` process per data dir |
+| Poetry version error | `pyproject.toml` must use PEP 440 (e.g. `0.1.0`, not `0.1.0-skeleton`) |
 
 See [SECURITY.md](../SECURITY.md) to report issues.

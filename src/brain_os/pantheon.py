@@ -189,7 +189,7 @@ class Pantheon:
             agent_names,
         )
 
-        ctx = {**context}
+        ctx = {**context, "route_intent": routing.get("intent")}
         if on_progress:
             ctx["_on_progress"] = on_progress
 
@@ -280,29 +280,41 @@ class Pantheon:
 
     async def board_meeting(
         self,
-        topic: str,
+        topic: str = "",
         participants: list[str] | None = None,
+        *,
+        send_email: bool = False,
+        operator_items: list[str] | None = None,
+        persist_ledger: bool = True,
+        ledger_path: object | None = None,
+        agenda_overrides: dict | None = None,
     ) -> BoardMeetingMinutes:
-        """Run a board meeting where multiple agents discuss a topic.
+        """Run board meeting v2 — data agenda, cited positions, tracked decisions.
 
-        Each participant contributes their perspective, then Athena
-        synthesises a final decision.
+        ``topic`` is an optional operator agenda add-on (empty/auto = live agenda only).
         """
-        agent_names = participants or list(self._agents.keys())
-        agent_names = [n for n in agent_names if n in self._agents and n != "athena"]
+        from brain_os.systems.board_meeting_v2 import run_board_meeting_v2
 
-        contributions = await self._gather_responses(agent_names, topic, {})
+        agent_names = participants
+        if agent_names is None:
+            agent_names = [
+                n for n in ("prometheus", "plutus", "hera", "tyche") if n in self._agents
+            ] or [n for n in self._agents if n not in {"athena", "nemesis", "vera"}]
+        else:
+            agent_names = [
+                n
+                for n in agent_names
+                if n in self._agents and n not in {"athena", "nemesis", "vera"}
+            ]
 
-        synthesis = await self._athena.handle(
-            topic,
-            {"agent_responses": contributions},
-        )
-
-        return BoardMeetingMinutes(
-            topic=topic,
-            participants=["athena"] + list(contributions.keys()),
-            contributions=contributions,
-            synthesis=synthesis,
+        return await run_board_meeting_v2(
+            topic or "",
+            agent_names,
+            send_email=send_email,
+            operator_items=operator_items,
+            persist_ledger=persist_ledger,
+            ledger_path=ledger_path,
+            agenda_overrides=agenda_overrides,
         )
 
     # ── helpers ──────────────────────────────────────────────────────────

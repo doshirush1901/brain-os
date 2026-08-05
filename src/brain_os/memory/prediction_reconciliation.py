@@ -31,6 +31,7 @@ from brain_os.memory.prediction_log import (
 )
 from brain_os.prompt_loader import load_prompt
 from brain_os.schemas.llm_outputs import PredictionReflection
+from brain_os.services.deal_dynamics_predictor import DEAL_DYNAMICS_OUTBOUND_PATTERN
 from brain_os.services.hot_leads_board import LeadBoardBucket, clear_lead_board_cache, load_lead_board
 from brain_os.services.revenue_mode_pipeline_store import (
     _company_key,
@@ -75,6 +76,9 @@ class ReconciliationReport:
     procedures_merged: int = 0
     failures_recorded: int = 0
     sophia_lessons: list[str] = field(default_factory=list)
+    weight_proposals_written: int = 0
+    drift_alerts: list[dict[str, Any]] = field(default_factory=list)
+    drift_enqueued: int = 0
 
 
 def _pipeline_row_for_account(account: str) -> dict[str, Any] | None:
@@ -205,12 +209,14 @@ async def reconcile_hot_lead_predictions(
     yday = yesterday or (date.today() - timedelta(days=1))
 
     snap = read_board_snapshot(yday)
+    yesterday_map: dict[str, Any] = {}
     if snap is None:
-        report.skipped = await _count_unreconciled_hot(log)
-        logger.info("No board snapshot for %s — skip reconciliation", yday.isoformat())
-        return report
-
-    yesterday_map = payload_to_board_map(snap.get("rows") or [])
+        logger.info(
+            "No board snapshot for %s — reconciling hot_lead via pipeline/CRM fallback",
+            yday.isoformat(),
+        )
+    else:
+        yesterday_map = payload_to_board_map(snap.get("rows") or [])
     clear_lead_board_cache()
     today_map = payload_to_board_map(
         [
@@ -224,7 +230,7 @@ async def reconcile_hot_lead_predictions(
         ]
     )
 
-    pending = await log.get_unreconciled(pattern_id=HOT_LEAD_BOARD_PATTERN)
+    pending = await log.get_unreconciled(pattern_id=HOT_LEAD_BOARD_PATTERN, max_age_days=0)
     for pred in pending:
         account = str(pred.context.get("account") or "").strip()
         if not account:
@@ -424,9 +430,27 @@ async def record_must_act_predictions(
     followup_idle_days: int = 5,
     dedupe_hours: float = 20.0,
 ) -> int:
-    """Record one prediction per must-act desk row."""
+    """Record one prediction per must-act desk row (accuracy-gated + narrowable)."""
+    from brain_os.memory.must_act_forecast_gate import must_act_recording_policy
+
+    policy = await must_act_recording_policy(log)
+    if not policy.get("record"):
+        logger.info(
+            "Must-act prediction recording paused: reason=%s accuracy=%s reconciled=%s",
+            policy.get("reason"),
+            policy.get("accuracy"),
+            policy.get("reconciled"),
+        )
+        return 0
+
+    max_per_cycle = int(policy.get("max_per_cycle") or 40)
+    blocking_only = bool(policy.get("blocking_only"))
     count = 0
     for company, item in _must_act_company_set(followup_idle_days).items():
+        if count >= max_per_cycle:
+            break
+        if blocking_only and not bool(item.get("blocking_progress")):
+            continue
         if await log.has_recent_unreconciled(
             MUST_ACT_TODAY_PATTERN,
             account=company,
@@ -444,6 +468,7 @@ async def record_must_act_predictions(
                 "act_bucket": bucket,
                 "blocking_progress": bool(item.get("blocking_progress")),
                 "recommended_action": str(item.get("recommended_action") or "")[:200],
+                "recording_policy": str(policy.get("reason") or ""),
             },
         )
         count += 1
@@ -478,6 +503,172 @@ def score_tyche_deal_outcome(
         return False, f"{company}: still {prior}", signals
     signals.append("unchanged")
     return False, f"{company}: no progression", signals
+
+
+_STAGE_RANK: dict[str, int] = {
+    "NEW": 0,
+    "CONTACTED": 1,
+    "ENGAGED": 2,
+    "QUALIFIED": 3,
+    "PROPOSAL": 4,
+    "NEGOTIATION": 5,
+    "WON": 6,
+    "LOST": -1,
+    "LEAD": 0,
+    "OPEN": 1,
+    "QUOTE": 4,
+}
+
+
+def score_outbound_deal_dynamics_outcome(
+    *,
+    company: str,
+    predicted_reply_prob: float,
+    predicted_stage_delta: int,
+    prior_crm_stage: str | None,
+    pipeline_status: str | None,
+    crm_stage: str | None,
+    age_days: float,
+) -> tuple[bool, str, list[str]]:
+    """Score deal-dynamics forecasts once they are mature enough to judge."""
+    signals: list[str] = []
+    pst = (pipeline_status or "").strip().lower()
+    prior = (prior_crm_stage or "").strip().upper()
+    current = (crm_stage or "").strip().upper()
+
+    if pst in {"replied", "won", "quote_sent", "negotiation", "qualified"}:
+        signals.append(f"pipeline_{pst}")
+        return True, f"{company}: pipeline {pst}", signals
+    if pst == "lost":
+        signals.append("pipeline_lost")
+        return False, f"{company}: pipeline lost", signals
+
+    if prior and current and prior in _STAGE_RANK and current in _STAGE_RANK:
+        if _STAGE_RANK[current] > _STAGE_RANK[prior]:
+            signals.append("crm_stage_advanced")
+            return True, f"{company}: CRM {prior} → {current}", signals
+        if current == "WON":
+            signals.append("crm_won")
+            return True, f"{company}: CRM won", signals
+        if current == "LOST":
+            signals.append("crm_lost")
+            return False, f"{company}: CRM lost", signals
+
+    # Mature predictions with no positive signal → incorrect (false optimism).
+    if age_days >= 3.0:
+        if predicted_stage_delta > 0 or predicted_reply_prob >= 0.35:
+            signals.append("mature_no_progress")
+            return (
+                False,
+                f"{company}: no reply/stage progress after {age_days:.0f}d",
+                signals,
+            )
+        signals.append("mature_low_prob_hold")
+        return True, f"{company}: low-prob hold confirmed ({age_days:.0f}d)", signals
+
+    # Too young — caller should skip.
+    signals.append("immature")
+    return False, f"{company}: immature ({age_days:.1f}d)", signals
+
+
+async def reconcile_outbound_deal_dynamics_predictions(
+    log: PredictionLog,
+    *,
+    crm: Any | None = None,
+    max_age_days: int = 0,
+    min_age_days: float = 3.0,
+) -> ReconciliationReport:
+    """Reconcile ``outbound_deal_dynamics`` predictions (previously never scored)."""
+    report = ReconciliationReport()
+    pending = await log.get_unreconciled(
+        pattern_id=DEAL_DYNAMICS_OUTBOUND_PATTERN,
+        max_age_days=max_age_days,
+    )
+    now = datetime.now(UTC)
+    for pred in pending:
+        company = str(pred.context.get("account") or "").strip()
+        if not company:
+            report.skipped += 1
+            continue
+        try:
+            created = datetime.fromisoformat(pred.timestamp.replace("Z", "+00:00"))
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=UTC)
+            age_days = (now - created.astimezone(UTC)).total_seconds() / 86400.0
+        except ValueError:
+            age_days = 999.0
+        if age_days < min_age_days:
+            report.skipped += 1
+            continue
+
+        prior_stage = str(pred.context.get("crm_stage") or "") or None
+        reply_prob = float(pred.context.get("reply_prob") or 0.0)
+        stage_delta = int(pred.context.get("stage_delta") or 0)
+        pipe = _pipeline_row_for_account(company)
+        pst = str(pipe.get("status") or "").strip().lower() if pipe else None
+        cst = await _crm_stage_async(crm, company) if crm is not None else None
+
+        ok, actual, signals = score_outbound_deal_dynamics_outcome(
+            company=company,
+            predicted_reply_prob=reply_prob,
+            predicted_stage_delta=stage_delta,
+            prior_crm_stage=prior_stage,
+            pipeline_status=pst,
+            crm_stage=cst,
+            age_days=age_days,
+        )
+        if "immature" in signals:
+            report.skipped += 1
+            continue
+        await log.record_outcome(pred.prediction_id, actual, ok)
+        report.reconciled += 1
+        if ok:
+            report.correct += 1
+        else:
+            report.incorrect += 1
+        report.rows.append(
+            ReconciliationRow(
+                prediction_id=pred.prediction_id,
+                account=company,
+                predicted_bucket=f"reply_prob={reply_prob:.2f}",
+                today_bucket=pst or cst,
+                pipeline_status=pst,
+                crm_stage=cst,
+                was_correct=ok,
+                actual_outcome=actual,
+                signals=signals,
+            )
+        )
+    return report
+
+
+async def expire_aged_unreconciled(
+    log: PredictionLog,
+    *,
+    older_than_days: float = 45.0,
+    pattern_id: str | None = None,
+) -> int:
+    """Mark ancient unreconciled rows expired so the backlog cannot grow forever."""
+    pending = await log.get_unreconciled(pattern_id=pattern_id, max_age_days=0)
+    now = datetime.now(UTC)
+    expired = 0
+    for pred in pending:
+        try:
+            created = datetime.fromisoformat(pred.timestamp.replace("Z", "+00:00"))
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=UTC)
+            age_days = (now - created.astimezone(UTC)).total_seconds() / 86400.0
+        except ValueError:
+            age_days = 999.0
+        if age_days < older_than_days:
+            continue
+        await log.record_outcome(
+            pred.prediction_id,
+            f"expired_unresolved after {age_days:.0f}d",
+            False,
+        )
+        expired += 1
+    return expired
 
 
 async def reconcile_tyche_deal_predictions(log: PredictionLog) -> ReconciliationReport:
@@ -689,14 +880,28 @@ async def apply_procedural_updates(
     report: ReconciliationReport,
     reflection: PredictionReflection | None,
     procedural: Any,
+    *,
+    must_act_accuracy: float | None = None,
+    must_act_reconciled: int = 0,
 ) -> tuple[int, int]:
     """Apply record_failure / merge_procedure_from_learning; returns (merged, failures)."""
+    from brain_os.memory.must_act_forecast_gate import (
+        is_must_act_reconciliation_row,
+        must_act_procedural_learning_enabled,
+    )
+
     merged = 0
     failures = 0
     fp_patterns = list(reflection.false_positive_patterns) if reflection else []
+    learn_from_must_act = must_act_procedural_learning_enabled(
+        accuracy=must_act_accuracy,
+        reconciled=must_act_reconciled,
+    )
 
     for row in report.rows:
         if not row.was_correct:
+            if is_must_act_reconciliation_row(row) and not learn_from_must_act:
+                continue
             trigger = _failure_trigger(row, fp_patterns)
             try:
                 await procedural.record_failure(trigger)
@@ -770,6 +975,7 @@ async def run_prediction_reconciliation_cycle(
     cfg = get_settings().app
     log = PredictionLog()
     await log.initialize()
+    pending_before = len(await log.get_unreconciled())
     try:
         hot_report = await reconcile_hot_lead_predictions(
             log, crm=crm, email_processor=email_processor
@@ -796,27 +1002,86 @@ async def run_prediction_reconciliation_cycle(
             report.skipped += ty_report.skipped
             report.rows.extend(ty_report.rows)
 
+        # outbound_deal_dynamics was recorded for months without a reconciler —
+        # score mature rows and expire ancient leftovers so the backlog clears.
+        dd_report = await reconcile_outbound_deal_dynamics_predictions(log, crm=crm)
+        report.reconciled += dd_report.reconciled
+        report.correct += dd_report.correct
+        report.incorrect += dd_report.incorrect
+        report.skipped += dd_report.skipped
+        report.rows.extend(dd_report.rows)
+        expired = await expire_aged_unreconciled(log, older_than_days=45.0)
+        if expired:
+            report.reconciled += expired
+            report.incorrect += expired
+            logger.info("Expired %d aged unreconciled predictions (>45d)", expired)
+
         reflection: PredictionReflection | None = None
         if not skip_llm and report.rows:
             reflection = await sophia_reflect_on_deltas(report)
             if reflection:
                 report.sophia_lessons = list(reflection.lessons)
 
+        must_act_accuracy: float | None = None
+        must_act_reconciled = 0
+        if cfg.prediction_record_must_act:
+            by_pattern = await log.accuracy_by_pattern(min_predictions=1)
+            must_act_accuracy = by_pattern.get(MUST_ACT_TODAY_PATTERN)
+            must_act_reconciled = await log.reconciled_count(pattern_id=MUST_ACT_TODAY_PATTERN)
+
         if procedural is not None and (report.rows or reflection):
-            merged, failures = await apply_procedural_updates(report, reflection, procedural)
+            merged, failures = await apply_procedural_updates(
+                report,
+                reflection,
+                procedural,
+                must_act_accuracy=must_act_accuracy,
+                must_act_reconciled=must_act_reconciled,
+            )
             report.procedures_merged = merged
             report.failures_recorded = failures
 
         if reflection:
             append_procedure_candidates(reflection)
 
+        try:
+            from brain_os.memory.prediction_weight_tuning import (
+                detect_prediction_drift,
+                enqueue_prediction_drift_for_morning_brain,
+                process_reconciliation_weight_loop,
+            )
+
+            by_pattern = await log.accuracy_by_pattern(min_predictions=1)
+            if report.sophia_lessons or reflection:
+                weight_loop = await process_reconciliation_weight_loop(
+                    lessons=report.sophia_lessons,
+                    reflection=reflection,
+                    log=log,
+                    reconciliation_accuracy=by_pattern,
+                )
+                report.weight_proposals_written = int(
+                    weight_loop.get("weight_proposals_written") or 0
+                )
+                report.drift_alerts = list(weight_loop.get("drift_alerts") or [])
+                report.drift_enqueued = int(weight_loop.get("drift_enqueued") or 0)
+            else:
+                drift = await detect_prediction_drift(log)
+                report.drift_alerts = drift
+                report.drift_enqueued = enqueue_prediction_drift_for_morning_brain(drift)
+        except Exception:
+            logger.exception("Prediction weight loop failed")
+
         if long_term is not None and report.sophia_lessons:
             try:
                 lesson_text = "; ".join(report.sophia_lessons[:5])
-                await long_term.store(
+                await long_term.store_gated(
                     f"[sophia_prediction_reflection] {lesson_text}",
                     user_id="global",
-                    metadata={"type": "sophia_prediction_reflection"},
+                    metadata={
+                        "type": "sophia_prediction_reflection",
+                        "memory_category": "sophia_lesson",
+                    },
+                    source="sophia:prediction_reflection",
+                    category="sophia_lesson",
                 )
             except Exception:
                 logger.debug("Long-term store of Sophia lessons failed", exc_info=True)
@@ -833,6 +1098,21 @@ async def run_prediction_reconciliation_cycle(
                 )
             if cfg.prediction_record_tyche_deals:
                 report.tyche_recorded = await record_tyche_deal_predictions(log)
+        try:
+            from brain_os.memory.dream_reconcile_metrics import append_dream_reconcile_event
+
+            append_dream_reconcile_event(
+                source="prediction_reconciliation",
+                reconciled=report.reconciled,
+                correct=report.correct,
+                incorrect=report.incorrect,
+                skipped=report.skipped,
+                pending_before=pending_before,
+                sophia_lessons=len(report.sophia_lessons),
+                operator_tickets=len(report.sophia_lessons),
+            )
+        except Exception:
+            logger.debug("dream reconcile metrics event failed", exc_info=True)
     finally:
         await log.close()
     return report

@@ -10,7 +10,7 @@ from enum import Enum
 from typing import Any
 from uuid import UUID, uuid4
 
-import aiosqlite  # noqa: F401 — characterization tests patch module connect
+import aiosqlite
 from langfuse.decorators import observe
 from pydantic import BaseModel, Field
 

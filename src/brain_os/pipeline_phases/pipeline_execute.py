@@ -41,20 +41,29 @@ async def execute_routed_agents(
     responses: dict[str, str] = {}
     sem = asyncio.Semaphore(max_parallel)
 
-    async def _run_agent(name: str) -> tuple[str, str]:
+    shared_audit = context.get("_tool_audit")
+    if not isinstance(shared_audit, list):
+        shared_audit = []
+        context["_tool_audit"] = shared_audit
+
+    async def _run_agent(name: str) -> tuple[str, str, list[dict[str, Any]]]:
         agent = pantheon.get_agent(name)
         if agent is None:
             logger.warning("Agent '%s' not found — skipping", name)
-            return name, ""
+            return name, "", []
         if on_progress:
             await on_progress(
                 execute_path_agent_started_event(name, role=getattr(agent, "role", ""))
             )
+        # Per-agent context copy + private audit list (merge after gather).
+        agent_ctx = dict(context)
+        local_audit: list[dict[str, Any]] = []
+        agent_ctx["_tool_audit"] = local_audit
         try:
             async with sem:
                 timeout_s = max(1, int(getattr(agent, "timeout", None) or slot_s))
                 resp = await asyncio.wait_for(
-                    agent.handle(query, context),
+                    agent.handle(query, agent_ctx),
                     timeout=timeout_s,
                 )
                 out = resp
@@ -66,11 +75,13 @@ async def execute_routed_agents(
             out = f"(Agent '{name}' encountered an error)"
         if on_progress:
             await on_progress(execute_path_agent_done_event(name, out))
-        return name, out
+        return name, out, local_audit
 
     tasks = [asyncio.create_task(_run_agent(name)) for name in agent_names]
     for task in asyncio.as_completed(tasks):
-        name, out = await task
+        name, out, local_audit = await task
+        if local_audit:
+            shared_audit.extend(local_audit)
         if not out:
             continue
         responses[name] = out

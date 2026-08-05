@@ -2,6 +2,11 @@
 
 Use this checklist after you fork [brain-os](https://github.com/doshirush1901/brain-os) to a **private** repository. Customer data, Gmail tokens, and production CRM never belong in the public upstream.
 
+**Start here if you are a peer founder:** [FRIEND_FORK.md](FRIEND_FORK.md) (90-minute win + week-1).
+**Load your documents:** [BUILD_YOUR_KB.md](BUILD_YOUR_KB.md).
+**Governance (draft-only, Cloud vs desktop):** [OPERATOR_GOVERNANCE.md](OPERATOR_GOVERNANCE.md).
+**Story / clinic:** [forkmybrain.org](https://forkmybrain.org).
+
 ## Day 0 — Fork and remote
 
 ```bash

@@ -57,6 +57,23 @@ class RouteInfo(BaseModel):
     telemetry: dict[str, Any] = Field(default_factory=dict)
 
 
+class BranchTelemetry(BaseModel):
+    """Early-branch audit fields (Letta peer spike; derived from trace when not explicit).
+
+    Maps to ``docs/LETTA_PEER_BRANCHING_SPIKE.md``. Populated at run-record assembly
+    from ``trace`` / ``meta`` so operators can see why a request took a cheap path.
+    """
+
+    perceive_class: str = ""
+    fast_memory_path: bool | None = None
+    memory_confidence: float | None = None
+    domain_match: float | None = None
+    route_skip: bool | None = None
+    bypass_cheap_exits: bool | None = None
+    post_remember_node: str | None = None
+    branch_source: Literal["derived", "explicit"] = "derived"
+
+
 class QualityInfo(BaseModel):
     """Quality and timing metadata."""
 
@@ -115,6 +132,7 @@ class RunRecord(BaseModel):
     cost_estimate: CostEstimate = Field(default_factory=CostEstimate)
     artifacts: RunRecordArtifacts = Field(default_factory=RunRecordArtifacts)
     transitions: dict[str, Any] = Field(default_factory=dict)
+    branch_telemetry: BranchTelemetry | None = None
 
     def summary(self) -> RunRecordSummary:
         """Perform the summary operation.

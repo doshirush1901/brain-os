@@ -30,6 +30,7 @@ class IntentCategory(str, Enum):
     VENDOR_PROCUREMENT = "VENDOR_PROCUREMENT"
     PROJECT_MANAGEMENT = "PROJECT_MANAGEMENT"
     QUALITY_MANAGEMENT = "QUALITY_MANAGEMENT"
+    SHOPFLOOR_OPS = "SHOPFLOOR_OPS"
     CASE_STUDY = "CASE_STUDY"
     QUOTE_GENERATION = "QUOTE_GENERATION"
     ARCHIVE_SEARCH = "ARCHIVE_SEARCH"
@@ -42,6 +43,8 @@ class IntentCategory(str, Enum):
     COMPANY_DOSSIER = "COMPANY_DOSSIER"
     NA_SALES_STRATEGY = "NA_SALES_STRATEGY"
     ENGINEERING_COMPUTE = "ENGINEERING_COMPUTE"
+    CODE_ARCHITECTURE = "CODE_ARCHITECTURE"
+    MEETING_SCHEDULING = "MEETING_SCHEDULING"
     GENERAL = "GENERAL"
 
 
@@ -115,6 +118,11 @@ ROUTING_TABLE: dict[IntentCategory, RoutingConfig] = {
         optional_agents=("atlas", "hephaestus"),
         required_tools=("retriever",),
     ),
+    IntentCategory.SHOPFLOOR_OPS: RoutingConfig(
+        required_agents=("daedalus",),
+        optional_agents=("hephaestus", "atlas", "hera", "asclepius"),
+        required_tools=("retriever",),
+    ),
     IntentCategory.CASE_STUDY: RoutingConfig(
         required_agents=("cadmus",),
         optional_agents=("clio", "calliope"),
@@ -173,6 +181,16 @@ ROUTING_TABLE: dict[IntentCategory, RoutingConfig] = {
     IntentCategory.ENGINEERING_COMPUTE: RoutingConfig(
         required_agents=("maestro",),
         optional_agents=("vera",),
+        required_tools=(),
+    ),
+    IntentCategory.CODE_ARCHITECTURE: RoutingConfig(
+        required_agents=("hephaestion",),
+        optional_agents=("metis", "vera"),
+        required_tools=(),
+    ),
+    IntentCategory.MEETING_SCHEDULING: RoutingConfig(
+        required_agents=("kairos",),
+        optional_agents=("calliope", "prometheus"),
         required_tools=(),
     ),
     IntentCategory.GENERAL: RoutingConfig(
@@ -237,6 +255,18 @@ _PATTERNS: list[_Pattern] = _compile(
         (r"\bpsi\b", IntentCategory.ENGINEERING_COMPUTE, 4.0),
         (r"\bw/m", IntentCategory.ENGINEERING_COMPUTE, 3.0),
         (r"\b°[cf]\b", IntentCategory.ENGINEERING_COMPUTE, 2.5),
+        # Meeting scheduling / calendar (Kairos) — before machine specs
+        (r"\bschedule\s+(a\s+)?(meeting|call|visit)\b", IntentCategory.MEETING_SCHEDULING, 5.0),
+        (r"\breschedule\b", IntentCategory.MEETING_SCHEDULING, 4.0),
+        (r"\bfind\s+(a\s+)?(date|time|slot)\b", IntentCategory.MEETING_SCHEDULING, 4.5),
+        (r"\b(am|are)\s+i\s+free\b", IntentCategory.MEETING_SCHEDULING, 5.0),
+        (r"\bmy\s+calendar\b", IntentCategory.MEETING_SCHEDULING, 4.0),
+        (r"\bcheck\s+(the\s+)?calendar\b", IntentCategory.MEETING_SCHEDULING, 4.0),
+        (r"\bavailability\b", IntentCategory.MEETING_SCHEDULING, 2.0),
+        (r"\bfree\s*/?\s*busy\b", IntentCategory.MEETING_SCHEDULING, 4.0),
+        (r"\bcalendar\s+invite\b", IntentCategory.MEETING_SCHEDULING, 4.0),
+        (r"\bmeeting\s+slots?\b", IntentCategory.MEETING_SCHEDULING, 4.0),
+        (r"\bdoes\s+\w+day\s+work\b", IntentCategory.MEETING_SCHEDULING, 3.5),
         # Machine specs
         (r"\bmachine\b", IntentCategory.MACHINE_SPECS, 1.5),
         (r"\bspecs?\b", IntentCategory.MACHINE_SPECS, 2.0),
@@ -331,6 +361,20 @@ _PATTERNS: list[_Pattern] = _compile(
         (r"\bcommissioning\b", IntentCategory.QUALITY_MANAGEMENT, 2.0),
         (r"\bdefect\b", IntentCategory.QUALITY_MANAGEMENT, 2.0),
         (r"\bsnag\b", IntentCategory.QUALITY_MANAGEMENT, 2.0),
+        # Shopfloor / MSME ops (Daedalus) — before generic production
+        (r"\bshop\s*floor\b", IntentCategory.SHOPFLOOR_OPS, 4.0),
+        (r"\bshopfloor\b", IntentCategory.SHOPFLOOR_OPS, 4.0),
+        (r"\b5s\b", IntentCategory.SHOPFLOOR_OPS, 4.0),
+        (r"\bvisual\s+factory\b", IntentCategory.SHOPFLOOR_OPS, 4.0),
+        (r"\bvalue\s+stream\b", IntentCategory.SHOPFLOOR_OPS, 3.5),
+        (r"\bkanban\b", IntentCategory.SHOPFLOOR_OPS, 3.0),
+        (r"\bandon\b", IntentCategory.SHOPFLOOR_OPS, 3.0),
+        (r"\bmaterial\s+flow\b", IntentCategory.SHOPFLOOR_OPS, 3.5),
+        (r"\bwip\s+(cap|control|discipline)\b", IntentCategory.SHOPFLOOR_OPS, 3.5),
+        (r"\bplant\s+layout\b", IntentCategory.SHOPFLOOR_OPS, 3.0),
+        (r"\blean\s+(manufacturing|ops|operations)\b", IntentCategory.SHOPFLOOR_OPS, 3.5),
+        (r"\bmsme\s+(plant|shop|factory)\b", IntentCategory.SHOPFLOOR_OPS, 3.5),
+        (r"\bdaedalus\b", IntentCategory.SHOPFLOOR_OPS, 5.0),
         # Case study / content
         (r"\bcase\s+stud", IntentCategory.CASE_STUDY, 3.0),
         (r"\blinkedin\s+post\b", IntentCategory.CASE_STUDY, 3.0),
@@ -396,6 +440,38 @@ _PATTERNS: list[_Pattern] = _compile(
         (r"\bself[\s-]?assess", IntentCategory.SYSTEM_TRAINING, 2.5),
         (r"\bweak\s+area", IntentCategory.SYSTEM_TRAINING, 2.0),
         (r"\bimprove\s+yourself\b", IntentCategory.SYSTEM_TRAINING, 2.5),
+        # Brain OS codebase architecture (Graphify — not Neo4j business graph)
+        (r"\bcode\s+graph\b", IntentCategory.CODE_ARCHITECTURE, 4.5),
+        (r"\bquery_code_graph\b", IntentCategory.CODE_ARCHITECTURE, 5.0),
+        (r"\bgraphify\b", IntentCategory.CODE_ARCHITECTURE, 4.0),
+        (r"\bwhat\s+broke\s+in\s+ira\b", IntentCategory.CODE_ARCHITECTURE, 5.0),
+        (r"\bblast\s+radius\b", IntentCategory.CODE_ARCHITECTURE, 4.0),
+        (r"\bimport\s+cycle", IntentCategory.CODE_ARCHITECTURE, 4.0),
+        (r"\bgod\s+node", IntentCategory.CODE_ARCHITECTURE, 4.0),
+        (r"\bsrc/brain_os\b", IntentCategory.CODE_ARCHITECTURE, 4.5),
+        (r"\bRequestPipeline\b", IntentCategory.CODE_ARCHITECTURE, 4.0),
+        (r"\bBaseAgent\b", IntentCategory.CODE_ARCHITECTURE, 3.5),
+        (r"\bcodebase\b", IntentCategory.CODE_ARCHITECTURE, 3.0),
+        (
+            r"\bhow\s+does\s+(the\s+)?(pipeline|router|pantheon|requestpipeline)\b",
+            IntentCategory.CODE_ARCHITECTURE,
+            4.5,
+        ),
+        (
+            r"\bhow\s+does\s+.*\b(route|routing|agents?)\b",
+            IntentCategory.CODE_ARCHITECTURE,
+            4.0,
+        ),
+        (
+            r"\bchange\s+impact\b.*\b(code|module|repo|codebase)\b",
+            IntentCategory.CODE_ARCHITECTURE,
+            4.0,
+        ),
+        (r"\bcan\s+we\s+ship\b", IntentCategory.CODE_ARCHITECTURE, 3.5),
+        (r"\b(system\s+audit|audit\s+ira)\b", IntentCategory.CODE_ARCHITECTURE, 3.5),
+        (r"\b(pytest|ruff|mypy)\b", IntentCategory.CODE_ARCHITECTURE, 3.0),
+        (r"\balembic\b", IntentCategory.CODE_ARCHITECTURE, 3.0),
+        (r"\bCI\s+failed\b", IntentCategory.CODE_ARCHITECTURE, 3.5),
         # Archive / document search
         (r"\barchive\b", IntentCategory.ARCHIVE_SEARCH, 3.0),
         (r"\bimports?\b", IntentCategory.ARCHIVE_SEARCH, 2.0),

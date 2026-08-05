@@ -20,6 +20,7 @@ _PHASE_VALIDATOR_ERRORS = (
     ValueError,
     KeyError,
     TypeError,
+    RuntimeError,
     asyncio.TimeoutError,
     httpx.HTTPError,
 )

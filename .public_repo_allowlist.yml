@@ -3,4 +3,8 @@ skip_paths_prefix:
   - examples/acme/
   - src/brain_os/brain/knowledge_graph_text.py
   - src/brain_os/services/triangulation_gaps.py
+forbidden_paths_prefix:
+  - marketing/
+  - investor-talks/
+  - docs/internal/
 exempt_line_contains: []

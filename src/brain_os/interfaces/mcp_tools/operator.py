@@ -73,6 +73,12 @@ async def operator_inbox_decide(
     if dec not in ("approve", "reject", "snooze"):
         return "Error: decision must be approve, reject, or snooze"
     inbox = _inbox()
+    email_processor = _svc(SK.EMAIL_PROCESSOR)
+    draft_sender = None
+    if email_processor is not None:
+        from brain_os.interfaces.email_processor import GmailDraftSender
+
+        draft_sender = GmailDraftSender(email_processor=email_processor)
     result = await inbox.decide(
         item_id=item_id,
         decision=dec,  # type: ignore[arg-type]
@@ -80,7 +86,8 @@ async def operator_inbox_decide(
         snooze_days=snooze_days,
         to_address=to_address.strip() or None,
         outbound_approvals=_svc(SK.OUTBOUND_APPROVALS),
-        email_processor=_svc(SK.EMAIL_PROCESSOR),
+        email_processor=email_processor,
+        draft_sender=draft_sender,
         tinder_service=_tinder(),
         quotes=_svc(SK.QUOTES),
     )

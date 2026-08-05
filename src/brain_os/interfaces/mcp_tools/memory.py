@@ -76,8 +76,17 @@ async def store_memory(content: str, user_id: str = "global", metadata: str = ""
 
     try:
         meta = json.loads(metadata) if metadata else None
-        result = await ltm.store(content, user_id=user_id, metadata=meta)
-        return json.dumps(result, indent=2, default=str)
+        meta_dict = dict(meta) if isinstance(meta, dict) else {}
+        cat = str(meta_dict.get("memory_category") or "session")
+        meta_dict.setdefault("memory_category", cat)
+        gated = await ltm.store_gated(
+            content,
+            user_id=user_id,
+            metadata=meta_dict,
+            source="mcp:store_memory",
+            category=cat,
+        )
+        return json.dumps(gated, indent=2, default=str)
     except Exception as exc:
         logger.exception("MCP store_memory failed")
         return f"Error: {exc}"
@@ -132,10 +141,11 @@ async def list_procedures(
     sort: str = "last_used",
 ) -> str:
     """List learned procedural routing patterns (read-only)."""
-    from brain_os.memory.procedural import ProceduralMemory, procedure_to_dict
+    from brain_os.memory.procedural import procedure_to_dict
+    from brain_os.runtime.procedural_factory import build_procedural_memory
 
     sort_key = sort if sort in ("last_used", "score") else "last_used"
-    pm = ProceduralMemory()
+    pm = build_procedural_memory()
     await pm.initialize()
     try:
         rows = await pm.list_procedures(
@@ -154,9 +164,10 @@ async def list_procedures(
 
 async def match_procedure(query: str) -> str:
     """Dry-run procedural routing for a query (same gates as pipeline step 4)."""
-    from brain_os.memory.procedural import ProceduralMemory, procedure_match_to_dict
+    from brain_os.memory.procedural import procedure_match_to_dict
+    from brain_os.runtime.procedural_factory import build_procedural_memory
 
-    pm = ProceduralMemory()
+    pm = build_procedural_memory()
     await pm.initialize()
     try:
         explanation = await pm.explain_procedure_match(query)

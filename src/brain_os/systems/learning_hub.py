@@ -419,10 +419,29 @@ class LearningHub:
             embedding = EmbeddingService()
             qdrant = QdrantManager(embedding_service=embedding)
             try:
+                from brain_os.config import get_settings
+                from brain_os.memory.long_term import LongTermMemory
+
+                long_term = None
+                try:
+                    mem0_key = get_settings().memory.api_key.get_secret_value()
+                    if mem0_key:
+                        long_term = LongTermMemory()
+                except (
+                    ImportError,
+                    OSError,
+                    ValueError,
+                    TypeError,
+                    KeyError,
+                    AttributeError,
+                ):
+                    pass
+
                 trainer = SleepTrainer(
                     correction_store=correction_store,
                     qdrant_manager=qdrant,
                     embedding_service=embedding,
+                    long_term=long_term,
                 )
 
                 stats = await trainer.run_training()

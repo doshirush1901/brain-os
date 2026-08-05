@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime  # noqa: F401 — characterization tests patch module
+from datetime import UTC, datetime
 from typing import Any
 
-import aiosqlite  # noqa: F401 — characterization tests patch module connect
+import aiosqlite
 from langfuse.decorators import observe
 
 from brain_os.memory.conversation_backend import (
@@ -85,9 +85,10 @@ class ConversationMemory:
                 "Do not include greetings or filler.",
                 older_text,
                 name="conversation.summarize_history",
+                model_tier="cheap",
             )
             return recent, (summary or "").strip()
-        except Exception as exc:
+        except Exception:
             logger.warning("History summarization failed; returning recent only", exc_info=True)
             return recent, ""
 
@@ -110,9 +111,10 @@ class ConversationMemory:
                 message,
                 ConversationEntities,
                 name="conversation.extract_entities",
+                model_tier="cheap",
             )
             return result.model_dump()
-        except Exception as exc:
+        except Exception:
             logger.exception("Entity extraction LLM call failed")
         return empty
 
@@ -126,8 +128,9 @@ class ConversationMemory:
                 system,
                 user_text,
                 name="conversation.resolve_coreferences",
+                model_tier="cheap",
             )
-        except Exception as exc:
+        except Exception:
             logger.exception("Coreference resolution LLM call failed")
             return message
         if not result or not result.strip():

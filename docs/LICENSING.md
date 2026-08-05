@@ -1,5 +1,7 @@
 # Brain OS — Licensing (Community vs Pro)
 
+**Licensor (BSL 1.1):** see root `LICENSE` (legal entity parameters).
+
 ## Community (default)
 
 - No key required

@@ -1,5 +1,4 @@
 """Pydantic models for structured LLM outputs.
-
 Every JSON schema that was previously parsed via ``json.loads()`` from raw
 LLM text is defined here as a Pydantic model.  These models are used with
 ``LLMClient.generate_structured()`` for type-safe, validated responses.
@@ -8,9 +7,11 @@ LLM text is defined here as a Pydantic model.  These models are used with
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
+
+from brain_os.schemas.outbound_voice import OutboundVoiceRubric as OutboundVoiceRubric
 
 # ── Email intent gold-set calibration (filename labels + classifier eval) ─
 
@@ -343,6 +344,27 @@ class DreamContradiction(BaseModel):
     sources: list[str] = Field(default_factory=list)
 
 
+class MemoryContradictionCandidate(BaseModel):
+    """Cross-store contradiction found during dream stage 3i."""
+
+    entity: str = ""
+    claim_a: str = ""
+    claim_b: str = ""
+    source_a: str = ""
+    source_b: str = ""
+    correct_value: str = ""
+    wrong_value: str = ""
+    confidence: str = "LOW"
+    category: str = "GENERAL"
+    rationale: str = ""
+
+
+class MemoryReconciliationResult(BaseModel):
+    """Structured contradiction candidates returned by the reconciliation model."""
+
+    contradictions: list[MemoryContradictionCandidate] = Field(default_factory=list)
+
+
 class DreamInsightItem(BaseModel):
     insight: str = ""
     confidence: str = ""
@@ -419,6 +441,21 @@ class DreamPrune(BaseModel):
     keep: list[int] = Field(default_factory=list)
     summarise: list[DreamPruneSummary] = Field(default_factory=list)
     archive: list[int] = Field(default_factory=list)
+
+
+# ── Context compaction (Hermes-inspired rolling summary) ─────────────────
+
+
+class CompactionSummary(BaseModel):
+    """Structured rolling compaction for pipeline enrichment or ReAct scratchpad."""
+
+    goal: str = ""
+    done: list[str] = Field(default_factory=list)
+    in_progress: list[str] = Field(default_factory=list)
+    blocked: list[str] = Field(default_factory=list)
+    decisions: list[str] = Field(default_factory=list)
+    key_files: list[str] = Field(default_factory=list)
+    next_steps: list[str] = Field(default_factory=list)
 
 
 # ── Sleep trainer ─────────────────────────────────────────────────────────
@@ -704,6 +741,49 @@ class ClarityAssessment(BaseModel):
     suggested_default_scope: str = ""
 
 
+class SocraticQuestionType(StrEnum):
+    """Typed counter-question categories for Sphinx v2 Socratic gate."""
+
+    SCOPE = "scope"
+    TRADEOFF = "tradeoff"
+    GROUND_TRUTH = "ground_truth"
+    SUCCESS_CRITERIA = "success_criteria"
+    ASSUMPTION = "assumption"
+
+
+class SocraticQuestion(BaseModel):
+    """One Socratic counter-question with a proposed default."""
+
+    type: SocraticQuestionType = SocraticQuestionType.ASSUMPTION
+    question: str = ""
+    proposed_default: str = ""
+    why_it_matters: str = ""
+    candidates: list[str] = Field(default_factory=list)
+    context_key: str = ""
+
+
+class SocraticQuestionSet(BaseModel):
+    """Strict LLM schema for Sphinx Socratic question generation (max 4)."""
+
+    questions: list[SocraticQuestion] = Field(default_factory=list, max_length=4)
+    ambiguity_summary: str = ""
+
+
+class SocraticMappedAnswer(BaseModel):
+    """One mapped answer keyed to a pending Socratic context_key."""
+
+    context_key: str = ""
+    answer: str = ""
+
+
+class SocraticResumeMatch(BaseModel):
+    """Strict schema: does this message answer the pending Socratic gate?"""
+
+    is_answer: bool = False
+    mapped_answers: list[SocraticMappedAnswer] = Field(default_factory=list)
+    reason: str = ""
+
+
 class ClarificationPayload(BaseModel):
     """Normalized clarify/can-proceed contract shared across runtime paths."""
 
@@ -779,3 +859,205 @@ class GepaStrategyOverlayCompile(BaseModel):
 class GepaOverlayGateDecision(BaseModel):
     approve: bool = False
     reason: str = Field(default="", max_length=500)
+
+
+class InboundReplyClassification(BaseModel):
+    """LLM output: classify an inbound reply to an outbound campaign send.
+
+    Canonical classes and routing: ``docs/EMAIL_TAXONOMY.md``.
+    ``confidence`` is required for routing (high/medium → consumers; low →
+    morning-brief unclassified).
+
+    ``category`` is one of: rfq | interested | question | objection | not_now |
+    not_interested | unsubscribe | bounce | auto_reply |
+    production_update | drawing_approval | payment_confirmation |
+    dispatch_notice | installation_report |
+    vendor_quote | vendor_order_confirmation |
+    complaint | support | general_inquiry.
+    """
+
+    category: Literal[
+        "rfq",
+        "interested",
+        "question",
+        "objection",
+        "not_now",
+        "not_interested",
+        "unsubscribe",
+        "bounce",
+        "auto_reply",
+        "production_update",
+        "drawing_approval",
+        "payment_confirmation",
+        "dispatch_notice",
+        "installation_report",
+        "vendor_quote",
+        "vendor_order_confirmation",
+        "complaint",
+        "support",
+        "general_inquiry",
+    ] = "question"
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    summary: str = Field(default="", max_length=500)
+    requested_next_step: str = Field(default="", max_length=200)
+    language: str = Field(default="en", max_length=16)
+
+
+class RfqParsedRequirements(BaseModel):
+    """Strict schema for one LLM RFQ extraction call (CPQ Wave 3)."""
+
+    machine_type: str = Field(default="", max_length=128)
+    machine_series: str = Field(default="", max_length=64)
+    machine_hint: str = Field(default="", max_length=255)
+    forming_area_mm: str = Field(
+        default="",
+        max_length=64,
+        description="Forming / platen area as W×L mm, e.g. 1400×1000",
+    )
+    draw_depth_mm: str = Field(default="", max_length=32)
+    clamp_force: str = Field(default="", max_length=64, description="e.g. 10 t max")
+    material: str = Field(default="", max_length=128)
+    gauge: str = Field(default="", max_length=64)
+    quantity: str = Field(default="", max_length=32)
+    voltage: str = Field(default="", max_length=64, description="e.g. 200 V, 3-phase, 50 Hz")
+    region_signal: str = Field(default="", max_length=64)
+    controls: str = Field(default="", max_length=255, description="PLC/HMI brand + series")
+    tooling: str = Field(default="", max_length=255)
+    timeline: str = Field(default="", max_length=128)
+    delivery_terms: str = Field(default="", max_length=128)
+    process_notes: str = Field(default="", max_length=500)
+    attachment_filenames: list[str] = Field(default_factory=list, max_length=40)
+    field_confidence: dict[str, float] = Field(
+        default_factory=dict,
+        description="Per-field confidence 0-1 for extracted values",
+    )
+    missing_fields: list[str] = Field(default_factory=list, max_length=30)
+    summary: str = Field(default="", max_length=500)
+
+
+class VendorQuoteLineItem(BaseModel):
+    """One line on a supplier quotation."""
+
+    part: str = Field(default="", max_length=255)
+    qty: float = Field(default=0.0, ge=0.0)
+    unit_price: float = Field(default=0.0, ge=0.0)
+    currency: str = Field(default="EUR", max_length=10)
+
+
+class VendorQuoteParsed(BaseModel):
+    """Strict schema for one LLM vendor-quote extraction call (ERP Stage 6 W1)."""
+
+    vendor: str = Field(default="", max_length=255)
+    line_items: list[VendorQuoteLineItem] = Field(default_factory=list, max_length=40)
+    total: float | None = Field(default=None, ge=0.0)
+    currency: str = Field(default="", max_length=10)
+    production_days: int | None = Field(default=None, ge=0)
+    freight_days: int | None = Field(default=None, ge=0)
+    freight_mode: str = Field(default="", max_length=64)
+    payment_terms: str = Field(default="", max_length=128)
+    validity: str = Field(default="", max_length=128)
+    wo_hint: str = Field(
+        default="",
+        max_length=64,
+        description="Inferred WO number e.g. 23011 when mentioned",
+    )
+    field_confidence: dict[str, float] = Field(default_factory=dict)
+    summary: str = Field(default="", max_length=500)
+
+
+class SerendipityCollisionVerdict(BaseModel):
+    """LLM output: forced collision pair evaluation for the Serendipity Engine."""
+
+    connection: str = Field(
+        default="NONE",
+        max_length=800,
+        description="Concrete business link for Acme Corp, or NONE.",
+    )
+    why_now: str = Field(default="", max_length=1000)
+    suggested_play: Literal[
+        "draft_outreach",
+        "add_to_campaign",
+        "create_campaign_design",
+        "revive_quote",
+        "research_deeper",
+        "tell_operator",
+    ] = "tell_operator"
+    confidence: int = Field(default=0, ge=0, le=100)
+    required_evidence_check: str = Field(default="", max_length=800)
+
+
+class LocalizedEmailDraft(BaseModel):
+    """LLM output: a localized outbound email draft plus a back-translation.
+
+    ``localized_subject`` / ``localized_body`` are in the target language with
+    every protected glossary term kept verbatim; ``back_translation`` is an
+    English re-translation of the localized body for operator review.
+    """
+
+    localized_subject: str = Field(default="", max_length=300)
+    localized_body: str = Field(default="", max_length=8000)
+    back_translation: str = Field(default="", max_length=8000)
+    target_language: str = Field(default="", max_length=16)
+    notes: str = Field(default="", max_length=500)
+
+
+class SessionMineExtraction(BaseModel):
+    """Per-session learning extract from a Graphe / Cursor transcript (cheap model)."""
+
+    lessons: list[str] = Field(default_factory=list)
+    corrections: list[str] = Field(
+        default_factory=list,
+        description="Operator corrections — candidate Mnemon ledger entries",
+    )
+    preferences: list[str] = Field(default_factory=list)
+    procedures: list[str] = Field(
+        default_factory=list,
+        description="Procedures that worked — candidate promotions",
+    )
+    open_loops: list[str] = Field(
+        default_factory=list,
+        description="Open TODOs / unfinished threads",
+    )
+    summary: str = Field(default="", max_length=600)
+
+
+# ── Weekly agent peer review (Vera / Metis / Sophia panel) ────────────────
+
+
+class AgentPeerPanelReview(BaseModel):
+    """One reviewer's strict-schema verdict for a weekly agent critic pass."""
+
+    reviewer: Literal["vera", "metis", "sophia"]
+    grounding_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    quality_score: float = Field(default=0.0, ge=0.0, le=100.0)
+    recurring_issue: str = Field(default="", max_length=500)
+    notes: str = Field(default="", max_length=2000)
+
+
+class AgentPeerScorecard(BaseModel):
+    """Composite weekly peer-review scorecard for one high-traffic agent."""
+
+    agent: str = Field(default="", max_length=64)
+    week: str = Field(default="", max_length=16)
+    samples: int = Field(default=0, ge=0)
+    grounding_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    tool_failure_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    top_recurring_issue: str = Field(default="", max_length=500)
+    one_suggested_prompt_improvement: str = Field(default="", max_length=2000)
+    panel: list[AgentPeerPanelReview] = Field(default_factory=list, max_length=3)
+
+
+# ── Wonder curiosity digest ───────────────────────────────────────────────
+class CuriosityConnection(BaseModel):
+    """One evidence-cited cross-agent connection from the weekly digest."""
+
+    summary: str = Field(default="", max_length=400)
+    agents: list[str] = Field(default_factory=list, max_length=4)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=4)
+    shared_token: str = Field(default="", max_length=64)
+
+
+class CuriosityDigest(BaseModel):
+    """Strict-schema weekly connections between agents' domains (max 3)."""
+
+    connections: list[CuriosityConnection] = Field(default_factory=list, max_length=3)

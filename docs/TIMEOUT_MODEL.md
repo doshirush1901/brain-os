@@ -117,22 +117,24 @@ Use this section with `runtime_counters` and `pipeline_recent_stage_timings` to 
 
 ---
 
-## 6. Embedded timeouts (inside `pipeline.py`)
+## 6. Embedded timeouts (inside pipeline phases)
 
-Beyond the four top-level knobs above, `pipeline.py` has several **embedded** timeouts on specific sub-steps. They all run inside the **total** pipeline budget but are not individually configurable today. Listed for operator awareness so unexplained cancels under load are easier to attribute.
+Beyond the four top-level knobs above, several **embedded** timeouts live on specific sub-steps under `src/brain_os/pipeline_phases/` (not only the facade `pipeline.py`). They all run inside the **total** pipeline budget; most are not individually configurable today. Listed for operator awareness so unexplained cancels under load are easier to attribute.
 
 | Sub-step | Default | Where | Notes |
 |----------|---------|-------|-------|
-| Sphinx clarify gate | 15s | `pipeline.py` (Sphinx call) | Vague queries get clarifying questions; if Sphinx itself stalls, the gate gives up so the rest of the pipeline can proceed. |
-| Outreach thread prefetch | 10s | `pipeline.py` (outreach branch) | Reads referenced Gmail thread context before the LLM drafts — bounded so a slow Gmail call cannot eat the whole budget. |
-| LEARN fact extraction (Mem0) | 8s | `_learn` (LLM-based fact extraction when enabled) | Background; failure here is logged and recorded in `_learn_metrics`. |
-| RealTimeObserver (in `_learn`) | 10s | `_learn` (observer call) | Background; on timeout, the observer is skipped and the rest of `_learn` continues. |
-| Faithfulness shared KB pull | implicit (`Qdrant` client default ~`QDRANT_TIMEOUT`) | `pipeline.py` (faithfulness gate) | One retrieval bundle reused for verifier + metacognition. Soft-fail on exception; sets `trace["kb_retrieval_degraded"] = True`. |
-| Background LEARN wait on shutdown | 30s | `wait_for_background_tasks(timeout=30)` | Used by CLI before exiting so durable writes don't get cancelled mid-flight. |
+| Sphinx clarify gate | 15s | `pipeline_phases/request_inner.py` (`sphinx_timeout_s=15`) | Vague queries get clarifying questions; if Sphinx stalls, the gate gives up so the rest of the pipeline can proceed. Replan path: `pipeline_phases/replan.py` uses `sphinx_timeout_s`. |
+| Outreach thread prefetch | 10s | `pipeline_phases/outreach.py` | Reads referenced Gmail thread context before the LLM drafts — bounded so a slow Gmail call cannot eat the whole budget. |
+| LEARN fact extraction (Mem0) | 8s | `pipeline_phases/learn.py` | Background; failure is logged and recorded in `_learn_metrics` / `GET /api/learn/last`. |
+| RealTimeObserver (in LEARN) | 10s | `pipeline_phases/learn.py` | Background; on timeout, the observer is skipped and the rest of LEARN continues. |
+| Faithfulness shared KB pull | implicit (`QDRANT_TIMEOUT`) | `pipeline_phases/validate.py` | One retrieval bundle reused for verifier + metacognition. Soft-fail on exception → `trace["degradation"]` (+ `kb_retrieval_degraded` where set). |
+| Agent slot / Athena synthesis | `APP__AGENT_TIMEOUT` / `APP__ATHENA_SYNTHESIS_TIMEOUT` | `pipeline_phases/pipeline_execute.py` | Configurable; see §1–2. |
+| Triangulation gaps appendix | `APP__PIPELINE_TRIANGULATION_GAPS_TIMEOUT_S` (default 25s) | `pipeline_phases/triangulation_gaps_append.py` | Optional post-shape gaps table when enabled. |
+| Background LEARN wait on shutdown | 30s | `pipeline.py` `wait_for_background_tasks(timeout=30)` | CLI exit path so durable writes are not cancelled mid-flight. |
 
 **Tuning guidance:** these are intentional inner bounds. If you find yourself wanting to extend them, prefer raising `APP__PIPELINE_TIMEOUT` first — then reach for a per-step knob if you have evidence that one specific step is the bottleneck.
 
-**Dynamic pipeline timeout:** when `APP__DYNAMIC_PIPELINE_TIMEOUT=true`, simple single-line queries get capped at `APP__PIPELINE_TIMEOUT_QUICK` rather than the full `APP__PIPELINE_TIMEOUT` (see `_effective_pipeline_timeout_seconds`).
+**Dynamic pipeline timeout:** when `APP__DYNAMIC_PIPELINE_TIMEOUT=true`, simple single-line queries get capped at `APP__PIPELINE_TIMEOUT_QUICK` rather than the full `APP__PIPELINE_TIMEOUT` (see `_effective_pipeline_timeout_seconds` on the pipeline facade / request entry).
 
 ---
 

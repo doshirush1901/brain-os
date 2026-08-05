@@ -1,8 +1,9 @@
 """Correction submission MCP tool.
 
 ``submit_correction`` records a factual correction in the CorrectionStore
-for Nemesis to process during the next Dream Mode cycle. Self-contained:
-opens its own CorrectionStore instance per call, no module-global state.
+*and* writes Mnemon's correction ledger immediately so overrides beat
+nostalgia without waiting for Dream. Self-contained: opens its own
+CorrectionStore instance per call, no module-global state.
 """
 
 from __future__ import annotations
@@ -24,9 +25,10 @@ async def submit_correction(
 ) -> str:
     """Submit a factual correction so Nemesis can train Brain OS during Dream Mode.
 
-    Use this when Brain OS gets a fact wrong — pricing, specs, customer info, etc.
-    Valid categories: PRICING, SPECS, CUSTOMER, COMPETITOR, GENERAL.
+    Also writes Mnemon's ledger immediately and returns an OVERRIDE ACTIVE
+    receipt. Valid categories: PRICING, SPECS, CUSTOMER, COMPETITOR, GENERAL.
     """
+    from brain_os.agents.mnemon import apply_ledger_correction
     from brain_os.brain.correction_store import CorrectionCategory, CorrectionStore
 
     try:
@@ -45,14 +47,31 @@ async def submit_correction(
             source="cursor_mcp",
         )
         await store.close()
-        return (
-            f"Correction #{row_id} logged for entity '{entity}' "
-            f"(category={cat.value}). Nemesis will process this during "
-            "the next Dream Mode cycle."
-        )
     except Exception as exc:
         logger.exception("MCP submit_correction failed")
         return f"Error: {exc}"
+
+    stale = [wrong_value.strip()] if (wrong_value or "").strip() else None
+    try:
+        ledger = await apply_ledger_correction(
+            entity=entity,
+            current_status=correct_value,
+            stale_values=stale,
+            source="cursor_mcp",
+        )
+        receipt = str(ledger.get("override_receipt") or "")
+    except Exception as exc:
+        logger.exception("MCP submit_correction ledger write failed")
+        return (
+            f"Correction #{row_id} logged for entity '{entity}' "
+            f"(category={cat.value}), but Mnemon ledger write failed: {exc}"
+        )
+
+    return (
+        f"Correction #{row_id} logged for entity '{entity}' "
+        f"(category={cat.value}). Nemesis will reinforce in Dream Mode.\n"
+        f"{receipt}"
+    )
 
 
 async def submit_praise(

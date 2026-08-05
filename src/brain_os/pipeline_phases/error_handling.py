@@ -171,8 +171,13 @@ async def complete_short_circuit_response(
     push_timings_fn: Callable[[], None],
     finalize_response_fn: Callable[[], Awaitable[tuple[str, list[str], str]]],
     record_stage_fn: Callable[[str], None],
+    graphe_log: dict[str, Any] | None = None,
 ) -> tuple[str, list[str], str]:
     """Finalize early-exit route with learn timing and dedup persistence."""
+    if graphe_log:
+        from brain_os.brain.graphe_instrumentation import log_graphe_pipeline_turn
+
+        await log_graphe_pipeline_turn(**graphe_log)
     record_stage_fn("route")
     record_stage_fn("shape")
     await learn_fn()

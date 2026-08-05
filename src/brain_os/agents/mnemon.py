@@ -66,6 +66,72 @@ async def _save_ledger(ledger: dict[str, Any]) -> None:
         await f.write(payload)
 
 
+def format_override_receipt(
+    *,
+    entity: str,
+    status: str,
+    corrected_at: str,
+    version: int,
+    ledger_path: str | Path | None = None,
+) -> str:
+    """One-line operator receipt: brain override is live, not chat-only."""
+    status_snip = " ".join(str(status).split())[:120]
+    path = str(ledger_path or _LEDGER_PATH)
+    return f"OVERRIDE ACTIVE: {entity} — {status_snip} (v{version}, {corrected_at}; {path})"
+
+
+async def apply_ledger_correction(
+    entity: str,
+    current_status: str,
+    stale_values: list[str] | None = None,
+    source: str = "user_correction",
+) -> dict[str, Any]:
+    """Write Mnemon ledger and return an override-active receipt dict.
+
+    Entry points (CLI, MCP, FeedbackHandler) should call this so factual
+    corrections beat nostalgia immediately — not only after Dream.
+    """
+    ledger = await _load_ledger()
+    key = entity.lower().strip() or "unknown"
+    status = str(current_status or "").strip()
+    existing = ledger["entities"].get(key, {})
+    old_stale = _normalize_ledger_entry(existing).get("stale_values", [])
+    merged_stale = list(set(old_stale + (stale_values or [])))
+    corrected_at = datetime.now(UTC).strftime("%Y-%m-%d")
+    version = int(existing.get("version", 0)) + 1
+
+    ledger["entities"][key] = {
+        "correct_value": status,
+        "current_status": status,
+        "stale_values": merged_stale,
+        "fact_type": _DEFAULT_FACT_TYPE,
+        "effective_from": datetime.now(UTC).date().isoformat(),
+        "scope": _DEFAULT_SCOPE,
+        "precedence": _DEFAULT_PRECEDENCE,
+        "version": version,
+        "corrected_at": corrected_at,
+        "source": source,
+    }
+    await _save_ledger(ledger)
+    logger.info("Mnemon: recorded correction for '%s' (v%s)", key, version)
+    receipt = format_override_receipt(
+        entity=key,
+        status=status,
+        corrected_at=corrected_at,
+        version=version,
+    )
+    return {
+        "entity": key,
+        "status": status,
+        "corrected_at": corrected_at,
+        "version": version,
+        "ledger_path": str(_LEDGER_PATH),
+        "source": source,
+        "override_receipt": receipt,
+        "mnemon_ledger_updated": True,
+    }
+
+
 def _normalize_ledger_entry(entry: dict[str, Any]) -> dict[str, Any]:
     """Normalize old/new ledger formats to canonical correction schema."""
     current_status = str(entry.get("current_status") or entry.get("correct_value") or "").strip()
@@ -185,8 +251,8 @@ class Mnemon(BaseAgent):
         stale_values: str = "",
     ) -> str:
         stale_list = [v.strip() for v in stale_values.split(",") if v.strip()]
-        await self.record_correction(entity, current_status, stale_list)
-        return f"Correction recorded for '{entity}'."
+        receipt = await self.record_correction(entity, current_status, stale_list)
+        return str(receipt.get("override_receipt") or f"Correction recorded for '{entity}'.")
 
     async def _tool_list_all(self) -> str:
         ledger = await _load_ledger()
@@ -385,36 +451,20 @@ class Mnemon(BaseAgent):
         current_status: str,
         stale_values: list[str] | None = None,
         source: str = "user_correction",
-    ) -> None:
-        """Add or update an entry in the correction ledger."""
-        ledger = await _load_ledger()
-        key = entity.lower().strip()
-
-        existing = ledger["entities"].get(key, {})
-        old_stale = _normalize_ledger_entry(existing).get("stale_values", [])
-        merged_stale = list(set(old_stale + (stale_values or [])))
-
-        ledger["entities"][key] = {
-            "correct_value": current_status,
-            "current_status": current_status,
-            "stale_values": merged_stale,
-            "fact_type": _DEFAULT_FACT_TYPE,
-            "effective_from": datetime.now(UTC).date().isoformat(),
-            "scope": _DEFAULT_SCOPE,
-            "precedence": _DEFAULT_PRECEDENCE,
-            "version": int(existing.get("version", 0)) + 1,
-            "corrected_at": datetime.now(UTC).strftime("%Y-%m-%d"),
-            "source": source,
-        }
-
-        await _save_ledger(ledger)
-        logger.info("Mnemon: recorded correction for '%s'", key)
+    ) -> dict[str, Any]:
+        """Add or update an entry in the correction ledger; return override receipt."""
+        return await apply_ledger_correction(
+            entity=entity,
+            current_status=current_status,
+            stale_values=stale_values,
+            source=source,
+        )
 
     async def record_correction_from_feedback(
         self,
         previous_query: str,
         correction_text: str,
-    ) -> None:
+    ) -> dict[str, Any]:
         """Extract entity and status from a feedback correction and record it.
 
         Uses simple heuristics to parse the correction text.  For complex
@@ -425,7 +475,7 @@ class Mnemon(BaseAgent):
         if len(words) > 5:
             entity = " ".join(words[:5])
 
-        await self.record_correction(
+        return await self.record_correction(
             entity=entity,
             current_status=correction_text[:500],
             source="feedback",

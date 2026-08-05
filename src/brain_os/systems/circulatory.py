@@ -120,6 +120,7 @@ class CirculatorySystem:
         self._ledger_path = _LEDGER_PATH
         self._ledger_path.parent.mkdir(parents=True, exist_ok=True)
 
+        DataEventBus.bind(event_bus)
         self._register_handlers()
 
     def _register_handlers(self) -> None:
@@ -132,6 +133,11 @@ class CirculatorySystem:
             self._bus.subscribe(EventType.CONTACT_CLASSIFIED, self._crm_to_neo4j_contact)
             self._bus.subscribe(EventType.COMPANY_CREATED, self._crm_to_neo4j_company)
             self._bus.subscribe(EventType.DEAL_CREATED, self._crm_to_neo4j_deal)
+            self._bus.subscribe(EventType.DEAL_UPDATED, self._crm_to_neo4j_deal)
+            self._bus.subscribe(EventType.QUOTE_UPSERTED, self._erp_quote_to_neo4j)
+            self._bus.subscribe(EventType.WORK_ORDER_UPSERTED, self._erp_wo_to_neo4j)
+            self._bus.subscribe(EventType.MACHINE_ASSET_UPSERTED, self._erp_asset_to_neo4j)
+            self._bus.subscribe(EventType.ACCOUNT_EVENT_RECORDED, self._erp_event_to_neo4j)
             self._bus.subscribe(EventType.RELATIONSHIP_DISCOVERED, self._relationship_to_neo4j)
 
         if self._qdrant and self._embedding:
@@ -144,12 +150,32 @@ class CirculatorySystem:
         if self._crm:
             self._bus.subscribe(EventType.ENTITY_ADDED, self._neo4j_to_crm)
 
+        # Campaign goal wait-steps — planner sequences; never sends
+        self._bus.subscribe(EventType.EMAIL_CLASSIFIED, self._campaign_goal_event)
+        self._bus.subscribe(EventType.EMAIL_RECEIVED, self._campaign_goal_event)
+        self._bus.subscribe(EventType.DEAL_UPDATED, self._campaign_goal_event)
+        self._bus.subscribe(EventType.DEAL_CREATED, self._campaign_goal_event)
+
         logger.info(
             "CirculatorySystem registered handlers (graph=%s, qdrant=%s, crm=%s)",
             self._graph is not None,
             self._qdrant is not None,
             self._crm is not None,
         )
+
+    async def _campaign_goal_event(self, event: DataEvent) -> None:
+        """Advance wait_for_event steps on matching bus events (gate-safe)."""
+        try:
+            from brain_os.systems.campaign_goals import apply_event_to_goals
+
+            body = dict(event.payload or {})
+            body["type"] = event.event_type.value
+            body["event_type"] = event.event_type.value
+            body.setdefault("evidence_ref", event.entity_id)
+            body.setdefault("entity_id", event.entity_id)
+            apply_event_to_goals(body)
+        except Exception:
+            logger.debug("campaign goal event hook failed", exc_info=True)
 
     # ── Change Ledger ────────────────────────────────────────────────────
 
@@ -209,6 +235,8 @@ class CirculatorySystem:
                 company_name=p.get("company", ""),
                 role=p.get("role", ""),
                 source_id=f"crm_contact::{email.lower()}",
+                crm_contact_id=str(p.get("contact_id") or p.get("id") or "").strip(),
+                crm_company_id=str(p.get("company_id") or "").strip(),
             )
 
             contact_type = p.get("contact_type", "")
@@ -247,11 +275,13 @@ class CirculatorySystem:
             return
 
         try:
+            crm_id = str(p.get("company_id") or p.get("id") or "").strip()
             await self._graph.add_company(
                 name=name,
-                region=p.get("region", ""),
-                industry=p.get("industry", ""),
-                company_id=str(p.get("company_id") or p.get("id") or "").strip(),
+                region=p.get("region", "") or "",
+                industry=p.get("industry", "") or "",
+                website=(p.get("website") or "") or "",
+                crm_company_id=crm_id,
                 source_id=f"crm_company::{name.lower()}",
             )
             logger.debug("Synced company %s to Neo4j", name)
@@ -279,29 +309,36 @@ class CirculatorySystem:
             return
         p = event.payload
         try:
-            deal_id = p.get("id", event.entity_id)
-            company = p.get("company", "")
-            machine = p.get("machine_model", "")
+            from brain_os.brain.graph_erp_spine import upsert_deal_node
+
+            deal_id = str(p.get("id") or event.entity_id)
+            company = str(p.get("company") or p.get("company_name") or "").strip()
+            machine = str(p.get("machine_model") or "").strip()
+            crm_company_id = str(p.get("company_id") or "").strip()
+            stage = str(p.get("stage") or "")
+            if hasattr(p.get("stage"), "value"):
+                stage = str(p["stage"].value)
 
             if company:
                 await self._graph.add_company(
                     name=company,
-                    source_id=f"crm_deal::{str(deal_id).lower()}",
+                    crm_company_id=crm_company_id,
+                    source_id=f"crm_deal::{deal_id.lower()}",
+                )
+                await upsert_deal_node(
+                    self._graph,
+                    deal_id=deal_id,
+                    company_name=company,
+                    stage=stage,
+                    value=float(p.get("value") or 0),
+                    currency=str(p.get("currency") or ""),
+                    machine_model=machine,
+                    title=str(p.get("title") or ""),
+                    crm_company_id=crm_company_id,
+                    source_id=f"crm_deal::{deal_id}",
                 )
 
-            if machine:
-                await self._graph._run_cypher_write(
-                    "MERGE (m:Machine {model: $model})",
-                    {"model": machine},
-                )
-                if company:
-                    await self._graph._run_cypher_write(
-                        "MATCH (c:Company {name: $company}), (m:Machine {model: $model}) "
-                        "MERGE (c)-[:INTERESTED_IN]->(m)",
-                        {"company": company, "model": machine},
-                    )
-
-            logger.debug("Synced deal %s to Neo4j", deal_id)
+            logger.debug("Synced deal %s to Neo4j (:Deal + INTERESTED_IN)", deal_id)
         except _NEO4J_SYNC_ERRORS:
             logger.exception("CRM→Neo4j deal sync failed for %s", event.entity_id)
             self._record_sync_receipt(
@@ -319,6 +356,160 @@ class CirculatorySystem:
                 operation="circulatory.crm_to_neo4j_deal",
                 run_id=event.entity_id,
                 metadata={"event_type": event.event_type.value},
+            )
+
+    async def _erp_quote_to_neo4j(self, event: DataEvent) -> None:
+        if event.source_store == SourceStore.NEO4J or self._graph is None:
+            return
+        p = event.payload
+        try:
+            from brain_os.brain.graph_erp_spine import upsert_quote_node
+
+            await upsert_quote_node(
+                self._graph,
+                quote_number=str(p.get("quote_number") or event.entity_id),
+                company_name=str(p.get("company_name") or p.get("company") or ""),
+                machine_model=str(p.get("machine_model") or ""),
+                value=float(p.get("estimated_value") or p.get("value") or 0),
+                currency=str(p.get("currency") or ""),
+                status=str(p.get("status") or "OPEN"),
+                sent_at=str(p.get("sent_at") or ""),
+                crm_company_id=str(p.get("company_id") or ""),
+                source_id=f"quote_registry::{p.get('quote_number') or event.entity_id}",
+            )
+            self._record_sync_receipt(
+                store="neo4j",
+                success=True,
+                operation="circulatory.erp_quote_to_neo4j",
+                run_id=event.entity_id,
+            )
+        except _NEO4J_SYNC_ERRORS:
+            logger.exception("ERP quote→Neo4j failed for %s", event.entity_id)
+            self._record_sync_receipt(
+                store="neo4j",
+                success=False,
+                operation="circulatory.erp_quote_to_neo4j",
+                run_id=event.entity_id,
+                reason="sync_failed",
+            )
+
+    async def _erp_wo_to_neo4j(self, event: DataEvent) -> None:
+        if event.source_store == SourceStore.NEO4J or self._graph is None:
+            return
+        p = event.payload
+        try:
+            from brain_os.brain.graph_erp_spine import upsert_account_event, upsert_work_order_node
+
+            await upsert_work_order_node(
+                self._graph,
+                wo_number=str(p.get("wo_number") or event.entity_id),
+                company_name=str(p.get("customer_name") or p.get("company_name") or ""),
+                machine_model=str(p.get("machine_model") or ""),
+                stage=str(p.get("stage") or ""),
+                status=str(p.get("status") or ""),
+                confirmed_at=str(p.get("confirmed_at") or ""),
+                created_at=str(p.get("created_at") or ""),
+                crm_company_id=str(p.get("company_id") or ""),
+                source_id=f"work_order::{p.get('wo_number') or event.entity_id}",
+            )
+            if p.get("event_type") and p.get("event_at"):
+                await upsert_account_event(
+                    self._graph,
+                    event_id=str(
+                        p.get("event_id") or f"woevt:{event.entity_id}:{p.get('event_at')}"
+                    ),
+                    company_name=str(p.get("customer_name") or p.get("company_name") or ""),
+                    event_type=str(p.get("event_type")),
+                    at=str(p.get("event_at")),
+                    stage=str(p.get("to_stage") or p.get("stage") or ""),
+                    description=str(p.get("description") or "")[:500],
+                    crm_company_id=str(p.get("company_id") or ""),
+                    work_order_id=str(p.get("id") or ""),
+                )
+            self._record_sync_receipt(
+                store="neo4j",
+                success=True,
+                operation="circulatory.erp_wo_to_neo4j",
+                run_id=event.entity_id,
+            )
+        except _NEO4J_SYNC_ERRORS:
+            logger.exception("ERP WO→Neo4j failed for %s", event.entity_id)
+            self._record_sync_receipt(
+                store="neo4j",
+                success=False,
+                operation="circulatory.erp_wo_to_neo4j",
+                run_id=event.entity_id,
+                reason="sync_failed",
+            )
+
+    async def _erp_asset_to_neo4j(self, event: DataEvent) -> None:
+        if event.source_store == SourceStore.NEO4J or self._graph is None:
+            return
+        p = event.payload
+        try:
+            from brain_os.brain.graph_erp_spine import upsert_machine_asset_node
+
+            await upsert_machine_asset_node(
+                self._graph,
+                asset_id=str(p.get("id") or event.entity_id),
+                company_name=str(p.get("company_name") or ""),
+                machine_model=str(p.get("model") or p.get("machine_model") or ""),
+                installed_date=str(p.get("installed_date") or ""),
+                warranty_end=str(p.get("warranty_end") or ""),
+                serial=str(p.get("serial") or ""),
+                crm_company_id=str(p.get("company_id") or ""),
+                source_id=f"machine_asset::{p.get('id') or event.entity_id}",
+            )
+            self._record_sync_receipt(
+                store="neo4j",
+                success=True,
+                operation="circulatory.erp_asset_to_neo4j",
+                run_id=event.entity_id,
+            )
+        except _NEO4J_SYNC_ERRORS:
+            logger.exception("ERP asset→Neo4j failed for %s", event.entity_id)
+            self._record_sync_receipt(
+                store="neo4j",
+                success=False,
+                operation="circulatory.erp_asset_to_neo4j",
+                run_id=event.entity_id,
+                reason="sync_failed",
+            )
+
+    async def _erp_event_to_neo4j(self, event: DataEvent) -> None:
+        if event.source_store == SourceStore.NEO4J or self._graph is None:
+            return
+        p = event.payload
+        try:
+            from brain_os.brain.graph_erp_spine import upsert_account_event
+
+            await upsert_account_event(
+                self._graph,
+                event_id=str(p.get("event_id") or event.entity_id),
+                company_name=str(p.get("company_name") or p.get("customer_name") or ""),
+                event_type=str(p.get("event_type") or "account_event"),
+                at=str(p.get("at") or p.get("event_at") or ""),
+                stage=str(p.get("stage") or ""),
+                amount=p.get("amount"),
+                currency=str(p.get("currency") or ""),
+                description=str(p.get("description") or "")[:500],
+                crm_company_id=str(p.get("company_id") or ""),
+                work_order_id=str(p.get("work_order_id") or ""),
+            )
+            self._record_sync_receipt(
+                store="neo4j",
+                success=True,
+                operation="circulatory.erp_event_to_neo4j",
+                run_id=event.entity_id,
+            )
+        except _NEO4J_SYNC_ERRORS:
+            logger.exception("ERP event→Neo4j failed for %s", event.entity_id)
+            self._record_sync_receipt(
+                store="neo4j",
+                success=False,
+                operation="circulatory.erp_event_to_neo4j",
+                run_id=event.entity_id,
+                reason="sync_failed",
             )
 
     async def _relationship_to_neo4j(self, event: DataEvent) -> None:

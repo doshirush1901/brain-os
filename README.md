@@ -13,6 +13,12 @@
 </p>
 
 <p align="center">
+  <a href="docs/FRIEND_FORK.md"><strong>Friend fork</strong></a>
+  &nbsp;&middot;&nbsp;
+  <a href="https://forkmybrain.org"><strong>forkmybrain.org</strong></a>
+  &nbsp;&middot;&nbsp;
+  <a href="docs/OPERATOR_GOVERNANCE.md"><strong>Operator governance</strong></a>
+  &nbsp;&middot;&nbsp;
   <a href="docs/QUICKSTART.md"><strong>Quickstart</strong></a>
   &nbsp;&middot;&nbsp;
   <a href="docs/MCP_SETUP.md"><strong>MCP setup</strong></a>
@@ -54,8 +60,8 @@ Triangulation before outbound: KB, CRM, mail scope, proof registry. See `docs/TR
 
 <br>
 
-> **Brain OS** is a *public fork* of a local-first multi-agent engine — **[Acme](examples/acme/)** synthetic data only.
-> Clone → private fork → your `.env` and production data never ship in this repo.
+> **Brain OS** is the public forkable skeleton — same multi-agent engine patterns as a private company operator, **[Acme](examples/acme/)** synthetic data only.
+> Clone → private fork → your `.env` and production data never ship in this repo. Story + clinic: [forkmybrain.org](https://forkmybrain.org).
 
 ---
 
@@ -126,6 +132,9 @@ poetry run brain ask "Summarize the Acme demo CRM" --json
 
 | Doc | Description |
 |:----|:------------|
+| [Friend fork](docs/FRIEND_FORK.md) | Peer path: 90-minute win + week-1 |
+| [Build your KB](docs/BUILD_YOUR_KB.md) | Index → ingest your company docs |
+| [Operator governance](docs/OPERATOR_GOVERNANCE.md) | Draft-only send, Cloud vs desktop, autonomy ladder |
 | [Quickstart](docs/QUICKSTART.md) | Clone → bootstrap → first `brain ask` |
 | [Acme demo path](docs/ACME_DEMO_PATH.md) | Ingest pack + Northwind account brief |
 | [Fork guide](docs/FORK_GUIDE.md) | Private fork checklist (7 days → month 1) |

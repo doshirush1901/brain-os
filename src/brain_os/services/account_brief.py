@@ -19,6 +19,7 @@ from brain_os.schemas.account_brief import (
     AtlasProductionSnapshot,
     CrmSnapshot,
     MailSnapshot,
+    ShopfloorTruthSnapshot,
     SourceRef,
     TimelineEvent,
     brief_context_for_llm,
@@ -70,7 +71,7 @@ async def build_account_brief(
         ph = pantheon
         services = dict(shared_services or {})
         if ph is None and needs_pantheon:
-            from brain_os.interfaces.cli_runtime import _build_pantheon
+            from brain_os.runtime.cli_runtime import _build_pantheon
 
             ph, services = _build_pantheon()
 
@@ -78,7 +79,7 @@ async def build_account_brief(
             nonlocal email_processor
             proc = email_processor
             if not skip_mail and proc is None and ph is not None:
-                from brain_os.interfaces.cli_runtime import (
+                from brain_os.runtime.cli_runtime import (
                     _build_digestive,
                     _build_email_processor,
                 )
@@ -140,6 +141,29 @@ async def build_account_brief(
 
             record_math_shadow_if_enabled(brief, surface="account_brief")
             brief = attach_math_advisory_if_enabled(brief)
+            from brain_os.services.evidence_freshness import attach_evidence_freshness
+
+            brief = attach_evidence_freshness(brief)
+            from brain_os.services.account_state import (
+                account_state_attach_to_brief_enabled,
+                build_account_state_from_brief,
+            )
+
+            if account_state_attach_to_brief_enabled():
+                from brain_os.services.deal_dynamics_predictor import attach_deal_dynamics_if_enabled
+                from brain_os.services.triangulation_gaps import triangulation_gaps
+
+                gaps = triangulation_gaps(brief, card=None, hex=False)
+                dynamics = await attach_deal_dynamics_if_enabled(brief)
+                brief = brief.model_copy(
+                    update={
+                        "account_state": build_account_state_from_brief(
+                            brief,
+                            deal_dynamics=dynamics,
+                            triangulation_gaps=gaps,
+                        ),
+                    },
+                )
             return brief
 
         if ph is not None and (needs_pantheon or deep or (not skip_mail)):
@@ -162,7 +186,13 @@ async def _gather_sources(
     email_processor: Any | None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
     tasks: list[tuple[str, Any]] = [
-        ("crm", asyncio.wait_for(_fetch_crm(company), timeout=_CRM_TIMEOUT)),
+        (
+            "crm",
+            asyncio.wait_for(
+                _fetch_crm(company, contact_email=contact_email),
+                timeout=_CRM_TIMEOUT,
+            ),
+        ),
     ]
     if not skip_mail and email_processor is not None:
         tasks.append(
@@ -227,8 +257,13 @@ async def _gather_sources(
     return out["crm"], out["mail"], out["kb"], out["proof"], out["argus"]
 
 
-async def _fetch_crm(company: str) -> dict[str, Any]:
+async def _fetch_crm(
+    company: str,
+    *,
+    contact_email: str | None = None,
+) -> dict[str, Any]:
     from brain_os.data.crm import CRMDatabase
+    from brain_os.data.crm_tier1 import crm_source_label
     from brain_os.services.revenue_mode_research import fetch_crm_research_bundle
 
     bundle = await fetch_crm_research_bundle(company)
@@ -238,8 +273,14 @@ async def _fetch_crm(company: str) -> dict[str, Any]:
     sources: list[SourceRef] = []
 
     if bundle.get("ok") and contacts:
-        sources.append(SourceRef(channel="crm", label="postgres_crm"))
+        sources.append(SourceRef(channel="crm", label=crm_source_label()))
+        want = (contact_email or "").strip().lower()
         primary = contacts[0]
+        if want:
+            for row in contacts:
+                if str(row.get("email") or "").strip().lower() == want:
+                    primary = row
+                    break
         contact_id = primary.get("id")
         contact_name = str(primary.get("name") or "")
         contact_mail = str(primary.get("email") or "")
@@ -561,6 +602,7 @@ def _assemble_brief(
         )
 
     from brain_os.brain.atlas_production_portfolio import match_production_for_account
+    from brain_os.services.shopfloor_before_customer import evaluate_shopfloor_for_brief
 
     atlas_raw = match_production_for_account(company, domain=domain)
     atlas_snap = AtlasProductionSnapshot.model_validate(atlas_raw)
@@ -579,6 +621,31 @@ def _assemble_brief(
             )
         )
 
+    risks: list[str] = []
+    shopfloor: ShopfloorTruthSnapshot | None = None
+    brief_for_sf = AccountBrief(
+        company_name=company,
+        domain=domain,
+        contact_email=resolved_email,
+        contact_name=resolved_name,
+        crm=crm_data.get("snapshot"),
+        atlas_production=atlas_snap,
+        generated_at=datetime.now(UTC),
+    )
+    try:
+        shopfloor = evaluate_shopfloor_for_brief(brief_for_sf)
+        if shopfloor.status == "contradiction":
+            risks.append(
+                shopfloor.detail
+                or (
+                    f"Shopfloor contradiction: Atlas {shopfloor.atlas_relation} "
+                    f"vs CRM {shopfloor.crm_stage or '(none)'} — treat as LIVE customer"
+                )
+            )
+    except Exception:
+        logger.debug("shopfloor_truth evaluation skipped", exc_info=True)
+        shopfloor = None
+
     return AccountBrief(
         company_name=company,
         domain=domain,
@@ -596,10 +663,11 @@ def _assemble_brief(
             if isinstance(mail_data.get("journey"), AccountJourney)
             else None
         ),
-        risks_gaps=[],
+        risks_gaps=risks,
         suggested_opener=None,
         sources=sources,
         atlas_production=atlas_snap,
+        shopfloor_truth=shopfloor,
         generated_at=datetime.now(UTC),
     )
 
@@ -633,10 +701,14 @@ async def _apply_llm_synthesis(
             temperature=0.2,
             max_tokens=1024,
         )
+        merged_gaps = list(brief.risks_gaps)
+        for g in synthesis.risks_gaps or []:
+            if g and g not in merged_gaps:
+                merged_gaps.append(g)
         return brief.model_copy(
             update={
                 "executive_summary": synthesis.executive_summary,
-                "risks_gaps": synthesis.risks_gaps,
+                "risks_gaps": merged_gaps,
                 "suggested_opener": synthesis.suggested_opener,
             }
         )

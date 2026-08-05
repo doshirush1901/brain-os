@@ -6,7 +6,16 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-OperatorInboxKind = Literal["outbound_email", "lead_review", "quote_draft"]
+OperatorInboxKind = Literal[
+    "outbound_email",
+    "lead_review",
+    "quote_draft",
+    "aftermarket_trigger",
+    "morning_action",
+    "proactive_watch",
+    "onshoring_pack",
+    "agent_steering",
+]
 OperatorInboxRisk = Literal["internal", "external_visible"]
 OperatorInboxDecision = Literal["approve", "reject", "snooze"]
 
@@ -20,6 +29,8 @@ class OperatorInboxItem(BaseModel):
     subtitle: str = ""
     company_name: str = ""
     risk: OperatorInboxRisk = "internal"
+    producer: str = ""
+    age_badge: str = ""
     preview: dict[str, Any] = Field(default_factory=dict)
     source: dict[str, Any] = Field(default_factory=dict)
     created_at: str | None = None
@@ -31,8 +42,14 @@ class OperatorInboxSummary(BaseModel):
     outbound_email: int = 0
     lead_review: int = 0
     quote_draft: int = 0
+    aftermarket_trigger: int = 0
+    morning_action: int = 0
+    proactive_watch: int = 0
+    onshoring_pack: int = 0
+    agent_steering: int = 0
     total: int = 0
     external_pending: int = 0
+    producer_types: list[str] = Field(default_factory=list)
 
 
 class OperatorInboxPayload(BaseModel):

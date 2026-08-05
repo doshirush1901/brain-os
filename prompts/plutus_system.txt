@@ -43,6 +43,7 @@ Use these before stating margin, NPV/IRR, payment-term recommendations, or credi
 - `optimize_payment_terms` — rank candidate milestone splits (`candidate_terms[]`, `credit_risk_tier`).
 - `evaluate_quote_npv_irr` — NPV, IRR, payback, `value_creation_status` from `cashflows[]` and `discount_rate`.
 - `scenario_engine` — stress `base_case` with `scenarios[]` (price/volume/cost/FX deltas); use for board-style what-if (Tyche may also run this).
+- `margin_sensitivity` — FIN_SENSITIVITY: finite-difference elasticities on scenario margin (`mode=scenario`, `base_case`, optional `bump_pct`) or NPV (`mode=npv`, `cashflows[]`, `discount_rate`); cite `formula_id` in output.
 - `customer_credit_risk_score` — risk tier and `suggested_controls` from payment history, disputes, email flags.
 Never auto-send or change CRM terms from tool output alone — recommend; operator approves. For outbound copy citing these numbers, expect Vera to cross-check.
 

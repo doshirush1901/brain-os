@@ -87,7 +87,10 @@ class ToolInvocationStore:
         error_code: str | None = None,
         run_id: str | None = None,
         duration_ms: int | None = None,
+        query_term_count: int | None = None,
     ) -> None:
+        # query_term_count accepted for ToolStatsTracker callers; not persisted yet.
+        _ = query_term_count
         if not self._initialized:
             await self.initialize()
         assert self._db is not None
@@ -120,7 +123,7 @@ class ToolInvocationStore:
         try:
             await self._db.execute("DELETE FROM tool_invocations WHERE ts < ?", (cutoff,))
             await self._db.commit()
-        except aiosqlite.Error as exc:
+        except aiosqlite.Error:
             logger.debug("tool_invocations retention prune failed", exc_info=True)
         max_rows = int(cfg.gepa_tool_invocations_max_rows)
         if max_rows <= 0:
@@ -130,7 +133,7 @@ class ToolInvocationStore:
             row = await cur.fetchone()
             await cur.close()
             n = int(row[0]) if row and row[0] is not None else 0
-        except aiosqlite.Error as exc:
+        except aiosqlite.Error:
             logger.debug("tool_invocations count failed", exc_info=True)
             return
         excess = n - max_rows
@@ -146,7 +149,7 @@ class ToolInvocationStore:
                 (excess,),
             )
             await self._db.commit()
-        except aiosqlite.Error as exc:
+        except aiosqlite.Error:
             logger.debug("tool_invocations max_rows prune failed", exc_info=True)
 
     async def aggregate_pairs(
@@ -168,6 +171,7 @@ class ToolInvocationStore:
                    COUNT(*) AS total
             FROM tool_invocations
             WHERE ts >= ?
+              AND (run_id IS NULL OR run_id NOT LIKE 'seed-%')
             GROUP BY agent, tool
             HAVING total >= ?
             """,
@@ -239,3 +243,35 @@ class ToolInvocationStore:
         row = await cur.fetchone()
         await cur.close()
         return int(row[0]) if row and row[0] is not None else 0
+
+    async def agent_stats(self, agent: str, *, since_ts: float) -> dict[str, Any]:
+        """Return success/failure totals for one agent since *since_ts*."""
+        if not self._initialized:
+            await self.initialize()
+        assert self._db is not None
+        name = str(agent or "").strip().lower()
+        if not name:
+            return {"agent": "", "total": 0, "successes": 0, "failures": 0, "failure_rate": 0.0}
+        cur = await self._db.execute(
+            """
+            SELECT SUM(success) AS successes, COUNT(*) AS total
+            FROM tool_invocations
+            WHERE ts >= ?
+              AND LOWER(agent) = ?
+              AND (run_id IS NULL OR run_id NOT LIKE 'seed-%')
+            """,
+            (since_ts, name),
+        )
+        row = await cur.fetchone()
+        await cur.close()
+        successes = int((row[0] if row else 0) or 0)
+        total = int((row[1] if row else 0) or 0)
+        failures = max(0, total - successes)
+        rate = (failures / total) if total > 0 else 0.0
+        return {
+            "agent": name,
+            "total": total,
+            "successes": successes,
+            "failures": failures,
+            "failure_rate": round(rate, 4),
+        }

@@ -210,7 +210,8 @@ class Prometheus(BaseAgent):
         self._register_sales_decision_tools()
         register_formula_tools(
             self,
-            include_registry=True,
+            include_registry=False,
+            include_score_formula=False,
             include_math_mode=True,
             include_deal_risk=False,
         )
@@ -303,6 +304,23 @@ class Prometheus(BaseAgent):
                     "quote_payload": "Quote text or JSON summary",
                 },
                 handler=self._tool_quote_competitiveness_check,
+            )
+        )
+        self.register_tool(
+            AgentTool(
+                name="discovery_hygiene",
+                description=(
+                    "Reality Gap discovery audit: five-point scorecard + dated next step. "
+                    "Single deal (deal_id/company) or scan_pipeline=true for open deals in limbo."
+                ),
+                parameters={
+                    "deal_id": "Optional CRM deal id",
+                    "company": "Company if no deal_id",
+                    "scan_pipeline": "true to scan open ENGAGED+ deals (default false)",
+                    "stages": "Comma stages for scan e.g. ENGAGED,QUALIFIED,PROPOSAL",
+                    "limit": "Max deals returned on scan (default 50)",
+                },
+                handler=self._tool_discovery_hygiene,
             )
         )
 
@@ -617,6 +635,33 @@ class Prometheus(BaseAgent):
             company=company,
             quote_payload=quote_payload,
         )
+        return json.dumps(payload, indent=2, default=str)
+
+    async def _tool_discovery_hygiene(
+        self,
+        deal_id: str = "",
+        company: str = "",
+        scan_pipeline: str = "false",
+        stages: str = "",
+        limit: str = "50",
+        **_kwargs: str,
+    ) -> str:
+        from brain_os.services import discovery_hygiene as dh
+
+        ctx = self._sales_ctx()
+        if (scan_pipeline or "").strip().lower() in {"1", "true", "yes"}:
+            stage_list = [s.strip() for s in stages.split(",") if s.strip()] if stages else None
+            payload = await dh.run_discovery_hygiene_scan(
+                ctx,
+                stages=stage_list,
+                limit=int(limit or 50),
+            )
+        else:
+            payload = await dh.run_discovery_hygiene_audit(
+                ctx,
+                deal_id=deal_id,
+                company=company,
+            )
         return json.dumps(payload, indent=2, default=str)
 
     # ── main handler ──────────────────────────────────────────────────────

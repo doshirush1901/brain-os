@@ -15,6 +15,21 @@ from brain_os.schemas.llm_outputs import OutreachRankingOutput
 from brain_os.service_keys import ServiceKey as SK
 from brain_os.services.hot_leads_board_sync import outreach_board_boost, outreach_should_exclude
 
+_OWN_MAIL_DOMAINS = frozenset(
+    {"example-company.org", "acme-corp.com", "example-company.in", "gmail.com"}
+)
+
+_OUTREACH_CRM_ERRORS = (
+    OSError,
+    RuntimeError,
+    ValueError,
+    TypeError,
+    AttributeError,
+    KeyError,
+    ImportError,
+    TimeoutError,
+)
+
 
 def has_thread_evidence(tool_audit: Any) -> bool:
     if not isinstance(tool_audit, list):
@@ -263,6 +278,152 @@ async def prefetch_outreach_thread_evidence(
     return guidance, audit
 
 
+async def _crm_snapshot_line_for_thread(
+    crm: Any | None,
+    messages: list[Any],
+) -> str:
+    """Lightweight CRM one-liner from thread participant emails (no full brief)."""
+    if crm is None or not messages:
+        return ""
+    seen_emails: list[str] = []
+    for msg in messages:
+        for attr in ("from_address", "to_address"):
+            raw = (getattr(msg, attr, None) or "").strip().lower()
+            if not raw or "@" not in raw:
+                continue
+            dom = raw.split("@", 1)[-1]
+            if dom in _OWN_MAIL_DOMAINS:
+                continue
+            if raw not in seen_emails:
+                seen_emails.append(raw)
+    for em in seen_emails[:4]:
+        try:
+            contact = await crm.get_contact_by_email(em)
+        except _OUTREACH_CRM_ERRORS:
+            continue
+        if contact is None:
+            continue
+        company = ""
+        comp = getattr(contact, "company", None)
+        if comp is not None:
+            company = (getattr(comp, "name", None) or "").strip()
+        stage = ""
+        try:
+            deals = await crm.get_deals_for_contact(str(getattr(contact, "id", "") or ""))
+        except _OUTREACH_CRM_ERRORS:
+            deals = []
+        if deals:
+            d0 = deals[0]
+            stage = str(d0.get("stage") or d0.get("status") or "").strip()
+            title = str(d0.get("title") or "").strip()
+            parts = [p for p in (company or "CRM contact", stage, title) if p]
+            return "CRM snapshot: " + " | ".join(parts[:3])
+        if company:
+            return f"CRM snapshot: {company} (contact {em})"
+    return ""
+
+
+async def prefetch_gmail_thread_by_id(
+    thread_ids: list[str],
+    *,
+    email_processor: Any | None = None,
+    crm: Any | None = None,
+    max_threads: int = 1,
+    body_chars: int = 4000,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Prefetch one or more Gmail threads by id (no search_emails sweep)."""
+    audit: list[dict[str, Any]] = []
+    if not thread_ids:
+        return "", audit
+    ep = email_processor or get_email_processor()
+    if ep is None:
+        audit.append(
+            {
+                "tool": "read_email_thread",
+                "success": False,
+                "error": "email_processor_unavailable",
+            }
+        )
+        return "", audit
+
+    snippets: list[str] = []
+    last_messages: list[Any] | None = None
+    for thread_id in thread_ids[:max_threads]:
+        try:
+            messages = await asyncio.wait_for(
+                ep.get_thread(thread_id),
+                timeout=10.0,
+            )
+        except TimeoutError:
+            audit.append(
+                {
+                    "tool": "read_email_thread",
+                    "thread_id": thread_id,
+                    "success": False,
+                    "error": "timeout",
+                }
+            )
+            continue
+        except _OUTREACH_CRM_ERRORS as exc:
+            audit.append(
+                {
+                    "tool": "read_email_thread",
+                    "thread_id": thread_id,
+                    "success": False,
+                    "error": str(exc)[:200],
+                }
+            )
+            continue
+
+        if not messages:
+            audit.append(
+                {
+                    "tool": "read_email_thread",
+                    "thread_id": thread_id,
+                    "success": False,
+                    "error": "empty_thread",
+                }
+            )
+            continue
+
+        last_messages = messages
+        latest = messages[-1]
+        body = (getattr(latest, "body", None) or "")[:body_chars]
+        snippets.append(
+            f"- Thread `{thread_id}` | latest {getattr(latest, 'received_at', '')} | "
+            f"From: {getattr(latest, 'from_address', '')} | "
+            f"To: {getattr(latest, 'to_address', '')} | "
+            f"Subject: {getattr(latest, 'subject', '')}\n"
+            f"  Body excerpt:\n{body}"
+        )
+        audit.append(
+            {
+                "tool": "read_email_thread",
+                "thread_id": thread_id,
+                "success": True,
+                "message_count": len(messages),
+            }
+        )
+
+    if not snippets:
+        return "", audit
+
+    crm_line = ""
+    if crm is not None and last_messages:
+        try:
+            crm_line = await _crm_snapshot_line_for_thread(crm, last_messages)
+        except _OUTREACH_CRM_ERRORS:
+            crm_line = ""
+
+    guidance = (
+        "Gmail thread evidence (prefetched by thread id — use read_email_thread only; "
+        "do not run broad search_emails for this request):\n" + "\n".join(snippets)
+    )
+    if crm_line:
+        guidance = f"{crm_line}\n\n{guidance}"
+    return guidance, audit
+
+
 def compose_outreach_workflow_query(
     query: str,
     shortlist: list[dict[str, Any]],
@@ -354,6 +515,7 @@ __all__ = [
     "extract_thread_reference",
     "get_email_processor",
     "has_thread_evidence",
+    "prefetch_gmail_thread_by_id",
     "prefetch_outreach_thread_evidence",
     "render_outreach_ranking",
 ]

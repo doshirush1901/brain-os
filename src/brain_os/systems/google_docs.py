@@ -567,6 +567,9 @@ class GoogleDocsService:
             RuntimeError,
             ValueError,
             TypeError,
+            AttributeError,
+            ImportError,
+            ModuleNotFoundError,
         ) as exc:
             return {"status": "error", "available": False, "error": str(exc)}
 

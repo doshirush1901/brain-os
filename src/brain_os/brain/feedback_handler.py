@@ -67,6 +67,7 @@ class FeedbackHandler:
         self,
         learning_hub: Any | None = None,
         correction_store: Any | None = None,
+        long_term: Any | None = None,
         mem0_client: Any | None = None,
         procedural_memory: Any | None = None,
         data_event_bus: Any | None = None,
@@ -75,7 +76,15 @@ class FeedbackHandler:
     ) -> None:
         self._learning_hub = learning_hub
         self._correction_store = correction_store
-        self._mem0_client = mem0_client
+        if long_term is not None:
+            self._long_term = long_term
+        elif mem0_client is not None:
+            logger.warning(
+                "FeedbackHandler mem0_client is deprecated; pass long_term=LongTermMemory()"
+            )
+            self._long_term = None
+        else:
+            self._long_term = None
         self._procedural_memory = procedural_memory
         self._event_bus = data_event_bus
         self._power_level_tracker = power_level_tracker
@@ -166,7 +175,7 @@ class FeedbackHandler:
                     await self._power_level_tracker.record_trust_decrease(
                         agents_used[i], agents_used[i + 1]
                     )
-            except (TimeoutError, DatabaseError, BrainOSError, httpx.HTTPError) as exc:
+            except (TimeoutError, DatabaseError, BrainOSError, httpx.HTTPError):
                 logger.debug("Trust decrease recording failed", exc_info=True)
 
         if polarity == "negative" and result.get("extracted_correction"):
@@ -214,7 +223,7 @@ class FeedbackHandler:
                             ValueError,
                             AttributeError,
                             KeyError,
-                        ) as exc:
+                        ):
                             logger.warning("Failed to emit correction event", exc_info=True)
                 except (
                     TimeoutError,
@@ -228,21 +237,12 @@ class FeedbackHandler:
                 ):
                     logger.exception("Correction store failed")
 
-            if self._mem0_client is not None:
+            if self._long_term is not None:
                 try:
-                    import asyncio as _aio
-
-                    _mem0_messages = [
-                        {
-                            "role": "user",
-                            "content": (
-                                f"Correction: {correction_text} (original query: {previous_query})"
-                            ),
-                        }
-                    ]
-                    _mem0_uid = user_id or "global"
-                    await _aio.to_thread(
-                        lambda: self._mem0_client.add(_mem0_messages, user_id=_mem0_uid)
+                    await self._long_term.store_correction(
+                        original=previous_response[:500],
+                        corrected=correction_text,
+                        context=f"feedback:{user_id}; query={previous_query[:200]}",
                     )
                 except (
                     TimeoutError,
@@ -288,38 +288,29 @@ class FeedbackHandler:
                     logger.exception("Micro-learning trigger failed")
 
             try:
-                from brain_os.agents.mnemon import _load_ledger, _save_ledger
+                from brain_os.agents.mnemon import apply_ledger_correction
 
-                ledger = await _load_ledger()
                 entity_key = previous_query[:100].strip().lower()
                 words = entity_key.split()
                 if len(words) > 5:
                     entity_key = " ".join(words[:5])
-                existing = ledger.get("entities", {}).get(entity_key, {})
-                old_stale = existing.get("stale_values", [])
+                stale: list[str] = []
                 if previous_response and len(previous_response) > 10:
-                    old_stale.append(previous_response[:200])
-                    old_stale = list(set(old_stale))
-                ledger.setdefault("entities", {})[entity_key] = {
-                    "correct_value": correction_text[:500],
-                    "current_status": correction_text[:500],
-                    "stale_values": old_stale,
-                    "fact_type": "general",
-                    "effective_from": __import__("datetime")
-                    .datetime.now(__import__("datetime").timezone.utc)
-                    .date()
-                    .isoformat(),
-                    "scope": "global",
-                    "precedence": 100,
-                    "version": int(existing.get("version", 0)) + 1,
-                    "corrected_at": __import__("datetime")
-                    .datetime.now(__import__("datetime").timezone.utc)
-                    .strftime("%Y-%m-%d"),
-                    "source": "feedback",
-                }
-                await _save_ledger(ledger)
+                    stale.append(previous_response[:200])
+                ledger_result = await apply_ledger_correction(
+                    entity=entity_key,
+                    current_status=correction_text[:500],
+                    stale_values=stale or None,
+                    source="feedback",
+                )
                 result["mnemon_ledger_updated"] = True
-                logger.info("Mnemon ledger updated for entity '%s'", entity_key)
+                result["override_receipt"] = ledger_result.get("override_receipt")
+                result["override_entity"] = ledger_result.get("entity")
+                result["override_version"] = ledger_result.get("version")
+                logger.info(
+                    "Mnemon ledger updated for entity '%s'",
+                    ledger_result.get("entity"),
+                )
             except (
                 OSError,
                 json.JSONDecodeError,
@@ -327,7 +318,7 @@ class FeedbackHandler:
                 TypeError,
                 AttributeError,
                 KeyError,
-            ) as exc:
+            ):
                 logger.warning("Failed to update Mnemon ledger from feedback", exc_info=True)
 
             if self._memory_block_store is not None:
@@ -596,7 +587,7 @@ class FeedbackHandler:
             TypeError,
             AttributeError,
             KeyError,
-        ) as exc:
+        ):
             logger.exception("LLM disambiguation failed")
             return {
                 "polarity": "ambiguous",

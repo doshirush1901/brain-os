@@ -108,7 +108,7 @@ def _get_guard():
         _guard_instance = Guard(name="brain_output_guard").use_many(_load_validators())
         logger.info("Guardrails AI loaded with validators")
         return _guard_instance
-    except (ImportError, OSError, RuntimeError, ValueError, TypeError, AttributeError) as exc:
+    except (ImportError, OSError, RuntimeError, ValueError, TypeError, AttributeError):
         logger.debug("Guardrails AI not available", exc_info=True)
         return None
 
@@ -144,6 +144,16 @@ def _load_validators() -> list:
     return validators
 
 
+def _guardrails_fail_closed() -> bool:
+    """Honor APP__GUARDRAILS_FAIL_CLOSED (default True). Unavailable config → closed."""
+    try:
+        from brain_os.config import get_settings
+
+        return bool(get_settings().app.guardrails_fail_closed)
+    except Exception:
+        return True
+
+
 async def validate_output(text: str) -> dict[str, Any]:
     """Run Guardrails validators on a text output.
 
@@ -151,9 +161,19 @@ async def validate_output(text: str) -> dict[str, Any]:
     - ``valid``: bool — whether all checks passed
     - ``issues``: list[str] — descriptions of any issues found
     - ``sanitized``: str — the text with PII redacted (if applicable)
+
+    When the guard is unavailable or throws, behavior follows
+    ``APP__GUARDRAILS_FAIL_CLOSED`` (default closed / ``valid=False``).
     """
+    fail_closed = _guardrails_fail_closed()
     guard = _get_guard()
     if guard is None:
+        if fail_closed:
+            return {
+                "valid": False,
+                "issues": ["Guardrails unavailable (fail-closed)"],
+                "sanitized": text,
+            }
         return {"valid": True, "issues": [], "sanitized": text}
 
     try:
@@ -171,6 +191,12 @@ async def validate_output(text: str) -> dict[str, Any]:
         }
     except (OSError, RuntimeError, ValueError, TypeError, AttributeError) as exc:
         logger.warning("Guardrails validation failed: %s", exc)
+        if fail_closed:
+            return {
+                "valid": False,
+                "issues": [f"Guardrails validation error (fail-closed): {exc}"],
+                "sanitized": text,
+            }
         return {"valid": True, "issues": [], "sanitized": text}
 
 
@@ -196,7 +222,7 @@ async def _google_check_grounding(
         from google.auth.transport.requests import Request
         from google.oauth2.credentials import Credentials
 
-        token_path = Path(".credentials") / "token_dlp.json"
+        token_path = Path("token_dlp.json")
         if not token_path.exists():
             return None
 
@@ -278,7 +304,7 @@ async def _google_check_grounding(
         KeyError,
         ImportError,
         AttributeError,
-    ) as exc:
+    ):
         logger.debug("Google Check Grounding failed", exc_info=True)
         return None
 
@@ -403,7 +429,7 @@ async def check_faithfulness(
         TypeError,
         AttributeError,
         KeyError,
-    ) as exc:
+    ):
         logger.debug("Dual-model faithfulness check failed, trying single", exc_info=True)
 
     # Tier 2: Single-model LLM fallback (OpenAI only)
@@ -434,7 +460,7 @@ async def check_faithfulness(
         TypeError,
         AttributeError,
         KeyError,
-    ) as exc:
+    ):
         logger.debug("Single-model faithfulness also failed, using heuristic", exc_info=True)
 
     # Tier 3: keyword-overlap heuristic (last resort)
@@ -575,7 +601,7 @@ async def check_confidentiality(
         TypeError,
         AttributeError,
         KeyError,
-    ) as exc:
+    ):
         logger.debug("LLM confidentiality check failed, using regex results", exc_info=True)
 
     return {

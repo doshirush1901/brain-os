@@ -73,15 +73,22 @@ class PendingMemoryQueue:
                 await self.mark_processed(rid)
                 continue
             try:
-                ids = await long_term.store(
+                gated = await long_term.store_gated(
                     body,
                     user_id="global",
                     metadata={
                         "type": "pending_memory_hint",
                         "source": src,
                         "queued_at": row.get("created_at", ""),
+                        "memory_category": "pending_hint",
                     },
+                    source=f"pending_queue:{src}",
+                    category="pending_hint",
                 )
+                if gated.get("skipped"):
+                    await self.mark_processed(rid)
+                    continue
+                ids = gated.get("entries", [])
                 if not ids:
                     failed += 1
                     continue

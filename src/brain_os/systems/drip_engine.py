@@ -22,6 +22,64 @@ from brain_os.services.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
 
+#: One retry + short backoff for transient CRM blips (pool / connection).
+_CRM_RETRY_POLICY_ATTEMPTS = 2
+_CRM_RETRY_BASE_DELAY_S = 0.35
+
+
+def _is_transient_crm_error(exc: BaseException) -> bool:
+    """True for errors that often clear after a brief pause (pool/conn)."""
+    if isinstance(exc, (SQLAlchemyError, OSError, TimeoutError, ConnectionError)):
+        return True
+    name = type(exc).__name__.lower()
+    if any(tok in name for tok in ("timeout", "disconnect", "operational", "interface", "dbapi")):
+        return True
+    msg = str(exc).lower()
+    return any(
+        tok in msg
+        for tok in (
+            "connection",
+            "timeout",
+            "timed out",
+            "pool",
+            "too many",
+            "server closed",
+            "could not connect",
+            "unavailable",
+            "reset by peer",
+        )
+    )
+
+
+async def _list_campaigns_with_retry(crm: Any) -> Any:
+    """list_campaigns with one retry on transient CRM errors."""
+    from brain_os.services.resilience import RetryPolicy, run_with_retry
+
+    async def _op() -> Any:
+        return await crm.list_campaigns()
+
+    return await run_with_retry(
+        _op,
+        policy=RetryPolicy(
+            max_attempts=_CRM_RETRY_POLICY_ATTEMPTS,
+            base_delay_seconds=_CRM_RETRY_BASE_DELAY_S,
+            max_delay_seconds=2.0,
+            jitter_ratio=0.1,
+        ),
+        is_retryable=lambda exc: _is_transient_crm_error(exc),
+    )
+
+
+def _crm_query_failed_payload(exc: BaseException) -> dict[str, Any]:
+    """Honest CRM failure shape for heartbeat outcomes (includes exception class)."""
+    return {
+        "campaigns": 0,
+        "active": 0,
+        "error": "CRM query failed",
+        "error_type": type(exc).__name__,
+        "error_detail": str(exc)[:300],
+    }
+
 
 def _as_utc_aware(dt: datetime | None) -> datetime | None:
     """Compare ORM/datetime values safely against ``datetime.now(timezone.utc)``."""
@@ -51,6 +109,58 @@ def _parse_llm_json_object(raw: str) -> dict[str, Any] | None:
         logger.warning("Drip LLM output was not valid JSON (first 120 chars): %s", text[:120])
         return None
     return out if isinstance(out, dict) else None
+
+
+async def compose_drip_outreach_email(
+    *,
+    company_name: str,
+    domain: str,
+    contact_email: str,
+    step_number: int = 1,
+    prior_context: str = "",
+    redis: Any | None = None,
+    pantheon: Any | None = None,
+    llm_client: Any | None = None,
+) -> tuple[str, str]:
+    """LLM-compose one drip step email; injects company news signals when resolvable."""
+    from brain_os.services.revenue_mode_research import build_signals_prompt_block
+    from brain_os.systems.global_outreach_composer import _parse_subj_body
+
+    resolved_domain = (domain or "").strip()
+    if not resolved_domain and "@" in contact_email:
+        resolved_domain = contact_email.split("@", 1)[1].strip().lower()
+
+    signals_block, _ = await build_signals_prompt_block(
+        company_name,
+        resolved_domain,
+        redis=redis,
+        pantheon=pantheon,
+    )
+
+    system = (
+        "You are Calliope writing a drip-campaign follow-up for Acme Services Inc.. "
+        "Plain text only — no markdown. Return exactly:\nSUBJECT: ...\nBODY: ...\n"
+    )
+    if signals_block:
+        system += f"\n{signals_block}\n"
+
+    user = (
+        f"Company: {company_name}\n"
+        f"Contact email: {contact_email}\n"
+        f"Drip step number: {step_number}\n"
+        f"Prior context: {prior_context or 'none'}\n"
+    )
+    llm = llm_client if llm_client is not None else LLMClient()
+    raw = await llm.generate_text(
+        system,
+        user,
+        temperature=0.45,
+        name="drip_compose",
+    )
+    subject, body = _parse_subj_body(raw)
+    if not subject:
+        subject = f"Re: Acme Corp × {company_name}"[:120]
+    return subject, body
 
 
 class AutonomousDripEngine:
@@ -209,10 +319,10 @@ class AutonomousDripEngine:
     async def evaluate_campaigns(self) -> dict[str, Any]:
         """Check active campaigns and evaluate performance metrics."""
         try:
-            campaigns = await self._crm.list_campaigns()
-        except (SQLAlchemyError, OSError, RuntimeError, ValueError, TypeError):
-            logger.exception("Failed to list campaigns")
-            return {"campaigns": 0, "active": 0, "error": "CRM query failed"}
+            campaigns = await _list_campaigns_with_retry(self._crm)
+        except (SQLAlchemyError, OSError, RuntimeError, ValueError, TypeError, TimeoutError) as exc:
+            logger.exception("Failed to list campaigns (%s)", type(exc).__name__)
+            return _crm_query_failed_payload(exc)
 
         active = [c for c in campaigns if getattr(c, "status", None) in ("ACTIVE", "active")]
 
@@ -258,9 +368,14 @@ class AutonomousDripEngine:
         errors: list[str] = []
 
         try:
-            campaigns = await self._crm.list_campaigns()
-        except (SQLAlchemyError, OSError, RuntimeError, ValueError, TypeError):
-            return {"sent": 0, "errors": ["CRM query failed"]}
+            campaigns = await _list_campaigns_with_retry(self._crm)
+        except (SQLAlchemyError, OSError, RuntimeError, ValueError, TypeError, TimeoutError) as exc:
+            return {
+                "sent": 0,
+                "errors": ["CRM query failed"],
+                "error_type": type(exc).__name__,
+                "error_detail": str(exc)[:300],
+            }
 
         active = [c for c in campaigns if getattr(c, "status", None) in ("ACTIVE", "active")]
 
@@ -297,6 +412,49 @@ class AutonomousDripEngine:
                             if thread_id:
                                 updates["reply_content"] = f"thread:{thread_id}"
                             await self._crm.update_drip_step(step.id, **updates)
+                            try:
+                                from brain_os.services.deliverability.send_ledger import (
+                                    append_send_event,
+                                )
+                                from brain_os.services.gtm_bandit_allocator import choose_variant
+
+                                experiment = choose_variant(seed=hash(contact.email) & 0xFFFFFFFF)
+                                company_name = (
+                                    str(
+                                        getattr(contact, "company_name", None)
+                                        or getattr(contact, "company", None)
+                                        or ""
+                                    ).strip()
+                                    or None
+                                )
+                                from brain_os.services.outbound_attribution import (
+                                    build_send_attribution_extra,
+                                )
+
+                                append_send_event(
+                                    kind="send",
+                                    recipient=contact.email,
+                                    campaign_id=str(getattr(campaign, "name", None) or campaign.id),
+                                    thread_id=thread_id or None,
+                                    subject=step.email_subject,
+                                    company=company_name,
+                                    extra=build_send_attribution_extra(
+                                        variant_id=str(experiment.get("variant_id") or "") or None,
+                                        angle=str(experiment.get("angle") or "") or None,
+                                        subject_style=str(experiment.get("subject_style") or "")
+                                        or None,
+                                        send_hour=experiment.get("send_hour"),
+                                        subject=step.email_subject or "",
+                                        body=step.email_body or "",
+                                        voice_skipped=True,
+                                    ),
+                                )
+                            except (OSError, RuntimeError, ValueError, TypeError, ImportError):
+                                logger.warning(
+                                    "drip send ledger append failed step=%s",
+                                    step.step_number,
+                                    exc_info=True,
+                                )
                             sent_count += 1
                         except (
                             TimeoutError,
@@ -373,20 +531,28 @@ class AutonomousDripEngine:
 
     async def run_cycle(self) -> dict[str, Any]:
         """Full drip cycle: evaluate, send pending, check replies."""
-        evaluation = await self.evaluate_campaigns()
-        send_result = await self.send_pending_steps()
-        reply_result = await self.check_replies()
+        from brain_os.services.llm_caller_context import llm_caller_scope
 
-        out: dict[str, Any] = {
-            "evaluation": evaluation,
-            "sends": send_result,
-            "replies": reply_result,
-        }
-        if get_settings().app.drip_llm_adjust and "error" not in evaluation:
-            try:
-                adjustments = await self._llm_suggest_adjustments(evaluation)
-                if adjustments is not None:
-                    out["llm_adjustments"] = adjustments
-            except (TimeoutError, BrainOSError, OSError, RuntimeError, ValueError, TypeError):
-                logger.exception("Drip LLM adjust failed")
-        return out
+        with llm_caller_scope(
+            source="background",
+            job="drip",
+            outcome_kind="drip_draft",
+            call_site="drip_engine.run_cycle",
+        ):
+            evaluation = await self.evaluate_campaigns()
+            send_result = await self.send_pending_steps()
+            reply_result = await self.check_replies()
+
+            out: dict[str, Any] = {
+                "evaluation": evaluation,
+                "sends": send_result,
+                "replies": reply_result,
+            }
+            if get_settings().app.drip_llm_adjust and "error" not in evaluation:
+                try:
+                    adjustments = await self._llm_suggest_adjustments(evaluation)
+                    if adjustments is not None:
+                        out["llm_adjustments"] = adjustments
+                except (TimeoutError, BrainOSError, OSError, RuntimeError, ValueError, TypeError):
+                    logger.exception("Drip LLM adjust failed")
+            return out

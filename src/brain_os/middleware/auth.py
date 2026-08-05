@@ -16,6 +16,18 @@ _bearer_scheme = HTTPBearer(auto_error=False)
 
 # Health checks stay anonymous everywhere (load balancers / probes).
 _HEALTH_PUBLIC_PATHS = frozenset({"/api/health", "/api/live"})
+# Webhooks authenticated by their own signature scheme (not Bearer):
+# WhatsApp uses Meta's X-Hub-Signature-256 HMAC + hub.verify_token handshake,
+# both enforced inside the route (fail-closed when secrets are configured).
+_SIGNED_WEBHOOK_PATHS = frozenset({"/api/whatsapp/webhook"})
+# Public one-click unsubscribe (RFC 8058): the path token IS the credential —
+# HMAC-signed + expiring, verified inside the route. Mail clients cannot send
+# Bearer headers, so the prefix stays anonymous.
+_SIGNED_TOKEN_PATH_PREFIXES = ("/api/optout/",)
+# Public inbound inquiry capture (example-company.org contact widget): browsers
+# cannot hold the Bearer secret. The route enforces its own optional widget
+# key (APP__INBOUND_WIDGET_API_KEY), per-IP rate limit, and honeypot field.
+_PUBLIC_FORM_PATHS = frozenset({"/api/inbound/inquiry"})
 # OpenAPI UI + schema: only anonymous on trusted development hosts (see require_api_key).
 _DOCS_PATHS = frozenset({"/docs", "/openapi.json", "/redoc"})
 
@@ -55,6 +67,9 @@ SENSITIVE_PATHS_BLOCKED_WITHOUT_SECRET = frozenset(
             "/api/operator/dashboard/stats",
             "/api/operator/dashboard/build",
             "/api/observability/snapshot",
+            "/api/observability/pipeline-recent",
+            "/api/observability/agent-stats",
+            "/api/observability/memory-health",
             "/api/revenue/desk",
             "/api/recruitment/candidates",
             "/api/recruitment/candidates/by-email/events",
@@ -134,6 +149,12 @@ async def require_api_key(
     """
     path = request.url.path
     if path in _HEALTH_PUBLIC_PATHS:
+        return
+    if path in _SIGNED_WEBHOOK_PATHS:
+        return
+    if path.startswith(_SIGNED_TOKEN_PATH_PREFIXES):
+        return
+    if path in _PUBLIC_FORM_PATHS:
         return
 
     secret_stripped = get_settings().app.api_secret_key.get_secret_value().strip()

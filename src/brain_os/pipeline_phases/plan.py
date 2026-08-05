@@ -13,6 +13,45 @@ from brain_os.data.models import PipelineContextModel
 from brain_os.exceptions import ToolExecutionError
 from brain_os.services.degradation import record_degradation_event
 
+_PLAN_SETTINGS_ERRORS = (
+    AttributeError,
+    ImportError,
+    ModuleNotFoundError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    OSError,
+)
+_OUTREACH_PREFETCH_ERRORS = (
+    OSError,
+    RuntimeError,
+    ValueError,
+    TypeError,
+    AttributeError,
+    KeyError,
+    ImportError,
+    TimeoutError,
+)
+
+
+def _episodes_read_allowed(resolved_input: str) -> bool:
+    """Gate the always-on plan-phase episode lookup (a metered Mem0 search).
+
+    When ``APP__PLAN_EPISODES_SCOPED`` is true (default), episodes are only
+    surfaced for memory-flavored queries — the same heuristic the retriever
+    fan-out uses. The memory-block injection path is unaffected.
+    """
+    from brain_os.config import get_settings
+
+    try:
+        if not bool(getattr(get_settings().app, "plan_episodes_scoped", True)):
+            return True
+    except _PLAN_SETTINGS_ERRORS:
+        return True
+    from brain_os.brain.retriever import query_is_memory_flavored
+
+    return query_is_memory_flavored(resolved_input)
+
 
 async def maybe_router_embedding_tiebreak(
     router: Any,
@@ -59,6 +98,7 @@ async def resolve_route_preamble(
     *,
     router: Any,
     resolved_input: str,
+    raw_input: str | None = None,
     bypass_cheap_exits: bool,
     procedural_memory: Any | None,
     maybe_router_embedding_tiebreak_fn: Callable[
@@ -81,6 +121,7 @@ async def resolve_route_preamble(
     )
 
     route_method: str | None = None
+    route_intent: str | None = None
     agent_names: list[str] = []
     optional_agent_names: list[str] = []
     required_tools: list[str] = []
@@ -89,6 +130,7 @@ async def resolve_route_preamble(
 
     if routing is not None:
         route_method = "deterministic"
+        route_intent = str(routing.get("intent") or "") or None
         agent_names = routing["required_agents"]
         optional_agent_names = list(routing.get("optional_agents") or [])
         optional_requested_snap = list(optional_agent_names)
@@ -108,13 +150,13 @@ async def resolve_route_preamble(
                     route_method = "truth_hint"
                     agent_names = []
                     logger.info("TRUTH HINT | matched: %s", hint.get("patterns", ["?"])[0][:60])
-        except Exception:
+        except Exception:  # noqa: BLE001 — optional PLAN enrichment; failure must not block routing
             logger.debug("Truth hints check failed (non-critical)")
 
     if route_method is None and procedural_memory is not None:
         try:
             procedure = await procedural_memory.find_procedure(resolved_input)
-        except Exception:
+        except Exception:  # noqa: BLE001 — procedural lookup failure falls back to no procedure
             logger.exception("ProceduralMemory lookup failed")
             procedure = None
 
@@ -128,13 +170,21 @@ async def resolve_route_preamble(
                 procedure.trigger_pattern,
                 procedure.times_used,
             )
+            # Bump last_used so an actively-routed instinct does not hit the TTL
+            # (procedural routes do not re-learn, so nothing else refreshes it).
+            try:
+                if procedure.id is not None:
+                    await procedural_memory.touch(procedure.id)
+            except Exception:  # noqa: BLE001 — procedural touch is best-effort bookkeeping
+                logger.debug("ProceduralMemory touch failed", exc_info=True)
 
     if route_method is None:
         route_method = "llm"
         logger.info("ROUTE LLM | delegating to Athena")
 
-    return {
+    preamble = {
         "route_method": route_method,
+        "route_intent": route_intent,
         "agent_names": agent_names,
         "optional_agent_names": optional_agent_names,
         "required_tools": required_tools,
@@ -143,12 +193,21 @@ async def resolve_route_preamble(
         "routing_scoreboard_snap": routing_scoreboard_snap,
         "emb_tie_detail": emb_tie_detail,
     }
+    from brain_os.brain.gmail_thread_routing import (
+        apply_gmail_thread_read_route_override,
+        apply_pipeline_shape_task_override,
+    )
+
+    route_anchor = (raw_input or resolved_input).strip() or resolved_input
+    preamble = apply_gmail_thread_read_route_override(preamble, query=route_anchor)
+    return apply_pipeline_shape_task_override(preamble, query=route_anchor)
 
 
 async def resolve_route_with_trace(
     *,
     router: Any,
     resolved_input: str,
+    raw_input: str | None = None,
     bypass_cheap_exits: bool,
     procedural_memory: Any | None,
     maybe_router_embedding_tiebreak_fn: Callable[
@@ -164,6 +223,7 @@ async def resolve_route_with_trace(
     route_preamble = await resolve_route_preamble(
         router=router,
         resolved_input=resolved_input,
+        raw_input=raw_input,
         bypass_cheap_exits=bypass_cheap_exits,
         procedural_memory=procedural_memory,
         maybe_router_embedding_tiebreak_fn=maybe_router_embedding_tiebreak_fn,
@@ -198,6 +258,11 @@ async def build_enrichment_parts(
     prefetch_outreach_thread_evidence_fn: Callable[
         [str], Awaitable[tuple[str, list[dict[str, Any]]]]
     ],
+    prefetch_gmail_thread_by_id_fn: Callable[
+        [list[str]], Awaitable[tuple[str, list[dict[str, Any]]]]
+    ]
+    | None = None,
+    gmail_thread_ids: list[str] | None = None,
     logger: Any,
     memory_blocks: Any | None = None,
     relationship_memory: Any | None = None,
@@ -225,7 +290,7 @@ async def build_enrichment_parts(
         style_prompt = style_tracker.get_style_prompt(contact_email)
         if style_prompt:
             enrichment_parts.append(style_prompt)
-    except Exception:
+    except Exception:  # noqa: BLE001 — optional PLAN enrichment; failure must not block routing
         logger.debug("AdaptiveStyle not available")
 
     try:
@@ -239,7 +304,7 @@ async def build_enrichment_parts(
         learnings_prompt = observer.format_for_prompt(contact_email)
         if learnings_prompt:
             enrichment_parts.append(learnings_prompt)
-    except Exception:
+    except Exception:  # noqa: BLE001 — optional PLAN enrichment; failure must not block routing
         logger.debug("RealTimeObserver not available")
 
     if endocrine is not None:
@@ -249,7 +314,7 @@ async def build_enrichment_parts(
                 f"System state: confidence={status.get('confidence', 0.5):.2f} "
                 f"energy={status.get('energy', 0.5):.2f}"
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 — optional PLAN enrichment; failure must not block routing
             logger.debug("Endocrine status not available", exc_info=True)
 
     try:
@@ -265,7 +330,7 @@ async def build_enrichment_parts(
             enrichment_parts.append(
                 "Top agents: " + ", ".join(f"{a['agent']}({a['tier']})" for a in top)
             )
-    except Exception:
+    except Exception:  # noqa: BLE001 — optional PLAN enrichment; failure must not block routing
         logger.debug("PowerLevelTracker not available", exc_info=True)
 
     try:
@@ -274,7 +339,7 @@ async def build_enrichment_parts(
             guidance = await chiron.get_sales_guidance()
             if guidance and len(guidance) > 20:
                 enrichment_parts.append(f"Sales coaching:\n{guidance[:500]}")
-    except (ToolExecutionError, Exception):
+    except (ToolExecutionError, Exception):  # noqa: BLE001 — optional PLAN enrichment; failure must not block routing
         logger.debug("Chiron sales guidance not available", exc_info=True)
 
     if history_summary:
@@ -298,10 +363,10 @@ async def build_enrichment_parts(
             if block_xml:
                 enrichment_parts.append(block_xml)
                 blocks_injected = True
-        except Exception:
+        except Exception:  # noqa: BLE001 — optional PLAN enrichment; failure must not block routing
             logger.debug("Memory blocks enrichment not available", exc_info=True)
 
-    if episodic is not None and not blocks_injected:
+    if episodic is not None and not blocks_injected and _episodes_read_allowed(resolved_input):
         try:
             episodes = await episodic.surface_relevant_episodes(
                 resolved_input,
@@ -310,7 +375,7 @@ async def build_enrichment_parts(
             if episodes:
                 ep_text = "\n".join(f"- {e.get('narrative', '')[:200]}" for e in episodes[:3])
                 enrichment_parts.append(f"Relevant past interactions:\n{ep_text}")
-        except Exception:
+        except Exception:  # noqa: BLE001 — optional PLAN enrichment; failure must not block routing
             logger.debug("Episodic memory enrichment not available", exc_info=True)
 
     try:
@@ -325,7 +390,7 @@ async def build_enrichment_parts(
         )
         if analog_blob:
             enrichment_parts.append(analog_blob)
-    except Exception:
+    except Exception:  # noqa: BLE001 — optional PLAN enrichment; failure must not block routing
         logger.debug("Analog accounts enrichment not available", exc_info=True)
 
     if require_thread_evidence and email_scope in ("both", "live_email"):
@@ -335,8 +400,22 @@ async def build_enrichment_parts(
                 enrichment_parts.append(evidence_blob)
             if audit_rows:
                 prefetched_tool_audit.extend(audit_rows)
-        except Exception:
+        except Exception:  # noqa: BLE001 — outreach prefetch failure must not block routing
             logger.warning("Outreach prefetch failed", exc_info=True)
+
+    if (
+        gmail_thread_ids
+        and prefetch_gmail_thread_by_id_fn is not None
+        and email_scope in ("both", "live_email")
+    ):
+        try:
+            thread_blob, thread_audit = await prefetch_gmail_thread_by_id_fn(gmail_thread_ids)
+            if thread_blob:
+                enrichment_parts.append(thread_blob)
+            if thread_audit:
+                prefetched_tool_audit.extend(thread_audit)
+        except _OUTREACH_PREFETCH_ERRORS:
+            logger.warning("Gmail thread-id prefetch failed", exc_info=True)
 
     try:
         from brain_os.brain.honcho_user_model import fetch_enrichment_text
@@ -344,8 +423,26 @@ async def build_enrichment_parts(
         honcho_blob = await fetch_enrichment_text(contact_email, resolved_input)
         if honcho_blob:
             enrichment_parts.append(f"User model (Honcho dialectic):\n{honcho_blob}")
-    except Exception:
+    except Exception:  # noqa: BLE001 — optional PLAN enrichment; failure must not block routing
         logger.debug("Honcho user-model enrichment not available", exc_info=True)
+
+    try:
+        from brain_os.brain.context_compaction import apply_preflight_compression
+        from brain_os.config import get_settings as _get_settings_compact
+        from brain_os.services.llm_client import get_llm_client
+
+        app_cfg = _get_settings_compact().app
+        enrichment_parts = await apply_preflight_compression(
+            enrichment_parts,
+            get_llm_client(),
+            enabled=app_cfg.preflight_compression_enabled,
+            threshold=app_cfg.preflight_compression_threshold,
+            structured=app_cfg.structured_compaction_summary_enabled,
+            prune_large_parts=app_cfg.tool_output_pruning_enabled,
+            enrichment_part_max_chars=app_cfg.enrichment_part_max_chars,
+        )
+    except Exception:  # noqa: BLE001 — preflight compaction is optional; prompt is sent uncompressed
+        logger.debug("Preflight context compaction skipped", exc_info=True)
 
     return enrichment_parts, prefetched_tool_audit
 
@@ -395,7 +492,7 @@ def resolve_email_scope_and_tool_discovery(
                     len(ranked_tools),
                     ",".join(shortlisted_tools),
                 )
-    except Exception:
+    except Exception:  # noqa: BLE001 — tool-discovery metadata is optional context
         logger.debug("Tool discovery metadata build failed", exc_info=True)
     return email_scope, require_thread_evidence, tool_discovery_meta
 
@@ -421,6 +518,8 @@ def build_execution_context(
     tool_discovery_meta: dict[str, Any],
     agent_journal: Any | None,
     memory_block_store: Any | None = None,
+    gmail_thread_read_only: bool = False,
+    gmail_thread_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build execute-context dict from pipeline services and enrichment blocks."""
     services: dict[str, Any] = {
@@ -451,6 +550,9 @@ def build_execution_context(
     )
     context: dict[str, Any] = ctx.model_dump()
     context["email_scope"] = email_scope
+    if gmail_thread_read_only:
+        context["gmail_thread_read_only"] = True
+        context["gmail_thread_ids"] = list(gmail_thread_ids or [])
 
     from brain_os.config import get_settings as _gs_req_snap
 

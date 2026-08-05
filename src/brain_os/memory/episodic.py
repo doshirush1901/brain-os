@@ -10,6 +10,7 @@ from typing import Any
 
 from langfuse.decorators import observe
 
+from brain_os.memory.episode_hygiene import should_skip_episode_write
 from brain_os.memory.episodic_backend import EpisodicMemoryBackend, build_episodic_backend
 from brain_os.memory.long_term import LongTermMemory
 from brain_os.prompt_loader import load_prompt
@@ -60,6 +61,7 @@ class EpisodicMemory:
                 transcript,
                 EpisodeConsolidation,
                 name="episodic.consolidate",
+                model_tier="cheap",
             )
             episode = {
                 "narrative": result.narrative or fallback["narrative"],
@@ -70,9 +72,22 @@ class EpisodicMemory:
                 "relationship_impact": result.relationship_impact
                 or fallback["relationship_impact"],
             }
-        except Exception as exc:
+        except Exception:
             logger.exception("Structured LLM call failed in EpisodicMemory.consolidate_episode")
             episode = fallback
+
+        skip_reason = should_skip_episode_write(
+            narrative=episode["narrative"],
+            transcript=conversation,
+            user_id=user_id,
+        )
+        if skip_reason:
+            return {
+                "skipped": True,
+                "skip_reason": skip_reason,
+                "user_id": user_id,
+                **episode,
+            }
 
         now = datetime.now(UTC).isoformat()
 
@@ -89,14 +104,17 @@ class EpisodicMemory:
             )
 
         if episode != fallback:
-            mem0_task = self._long_term.store(
+            mem0_task = self._long_term.store_gated(
                 episode["narrative"],
                 user_id,
                 metadata={
                     "type": "episode",
                     "key_topics": json.dumps(episode["key_topics"]),
                     "emotional_tone": episode["emotional_tone"],
+                    "memory_category": "episode",
                 },
+                source="episodic:consolidate",
+                category="episode",
             )
             ep_id, _ = await asyncio.gather(_write_episode(), mem0_task)
         else:
@@ -120,8 +138,9 @@ class EpisodicMemory:
                 _WEAVE_SYSTEM_PROMPT,
                 formatted,
                 name="episodic.weave",
+                model_tier="cheap",
             )
-        except Exception as exc:
+        except Exception:
             logger.exception("Text LLM call failed in EpisodicMemory.weave_episodes")
             return "(Narrative weaving failed)"
         if not raw or not raw.strip():
@@ -129,7 +148,10 @@ class EpisodicMemory:
         return raw.strip()
 
     async def surface_relevant_episodes(self, query: str, user_id: str) -> list[dict]:
-        mem0_results = await self._long_term.search(query, user_id, limit=5)
+        # Server-side type filter (Mem0 v2) — only episode memories come back.
+        mem0_results = await self._long_term.search(
+            query, user_id, limit=5, metadata_filter={"type": "episode"}
+        )
         mem0_episodes = [r for r in mem0_results if r.get("metadata", {}).get("type") == "episode"]
 
         keywords = query.lower().strip().split()[:3]

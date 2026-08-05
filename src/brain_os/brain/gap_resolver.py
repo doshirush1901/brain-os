@@ -118,6 +118,7 @@ class GapResolver:
                 _RESOLUTION_SYSTEM,
                 user_msg,
                 name="gap_resolver.resolve",
+                model_tier="cheap",
             )
         except LLMError:
             logger.warning("LLM gap resolution failed for: %s", query, exc_info=True)
@@ -137,6 +138,7 @@ class GapResolver:
                 source=f"gap_resolution:{query[:100]}",
                 confidence=0.6,
                 mem0_user_id=_muid,
+                category="fact",
             )
         except BrainOSError:
             logger.warning("Failed to store resolved gap fact", exc_info=True)

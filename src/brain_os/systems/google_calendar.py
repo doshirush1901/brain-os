@@ -181,6 +181,107 @@ class GoogleCalendarService:
             "attendees": created.get("attendees", []),
         }
 
+    async def create_all_day_block(
+        self,
+        *,
+        summary: str,
+        start_date: str,
+        end_date: str,
+        description: str = "",
+        location: str = "",
+        calendar_id: str = "primary",
+        color_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Create an all-day calendar block (travel / expo / prep).
+
+        ``end_date`` is exclusive (Google Calendar convention): a one-day block
+        uses start_date=2026-07-06, end_date=2026-07-07.
+        """
+        if not self.available:
+            await self.connect()
+        if self._calendar_service is None:
+            raise GoogleCalendarError(self._last_error or "Google Calendar not connected")
+
+        body: dict[str, Any] = {
+            "summary": summary.strip() or "Block",
+            "description": description or "",
+            "start": {"date": start_date},
+            "end": {"date": end_date},
+        }
+        if location.strip():
+            body["location"] = location.strip()
+        if color_id:
+            body["colorId"] = str(color_id)
+
+        def _create() -> dict[str, Any]:
+            return (
+                self._calendar_service.events()
+                .insert(calendarId=calendar_id or "primary", body=body)
+                .execute()
+            )
+
+        try:
+            created = await asyncio.to_thread(_create)
+        except (OSError, RuntimeError, ValueError, TypeError) as exc:
+            raise GoogleCalendarError(f"Failed to create all-day block: {exc}") from exc
+
+        return {
+            "event_id": created.get("id"),
+            "event_link": created.get("htmlLink"),
+            "start": created.get("start"),
+            "end": created.get("end"),
+        }
+
+    async def list_events_in_range(
+        self,
+        *,
+        time_min_iso: str,
+        time_max_iso: str,
+        calendar_id: str = "primary",
+        max_results: int = 250,
+    ) -> list[dict[str, Any]]:
+        """List timed and all-day events between ``time_min_iso`` and ``time_max_iso`` (RFC3339)."""
+        if not self.available:
+            await self.connect()
+        if self._calendar_service is None:
+            raise GoogleCalendarError(self._last_error or "Google Calendar not connected")
+
+        def _list() -> list[dict[str, Any]]:
+            resp = (
+                self._calendar_service.events()
+                .list(
+                    calendarId=calendar_id or "primary",
+                    timeMin=time_min_iso,
+                    timeMax=time_max_iso,
+                    maxResults=max_results,
+                    singleEvents=True,
+                    orderBy="startTime",
+                )
+                .execute()
+            )
+            return resp.get("items", [])
+
+        try:
+            raw = await asyncio.to_thread(_list)
+        except (OSError, RuntimeError, ValueError, TypeError) as exc:
+            raise GoogleCalendarError(f"Failed to list events: {exc}") from exc
+
+        events: list[dict[str, Any]] = []
+        for ev in raw:
+            start = ev.get("start", {}) or {}
+            end = ev.get("end", {}) or {}
+            events.append(
+                {
+                    "event_id": ev.get("id"),
+                    "summary": ev.get("summary", "(No title)"),
+                    "start": start.get("dateTime") or start.get("date", ""),
+                    "end": end.get("dateTime") or end.get("date", ""),
+                    "location": ev.get("location", ""),
+                    "htmlLink": ev.get("htmlLink", ""),
+                }
+            )
+        return events
+
     async def check_availability(
         self,
         *,

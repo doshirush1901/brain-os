@@ -23,7 +23,7 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from brain_os.interfaces.cli_runtime import (
+from brain_os.runtime.cli_runtime import (
     _build_digestive,
     _build_email_processor,
     _build_pantheon,
@@ -272,7 +272,7 @@ def crm_twenty_sync_segments(
     limit: int = typer.Option(500, "--limit", help="Max contacts to scan."),
     json_output: bool = typer.Option(False, "--json", help="JSON stats."),
 ) -> None:
-    """Push operator_segment labels from Postgres to Twenty People (jobTitle prefix)."""
+    """Push operator_segment labels from Postgres to Twenty People (``iraSegment`` custom field)."""
 
     async def _sync() -> dict[str, Any]:
         from brain_os.data.twenty_settings import get_twenty_config
@@ -295,6 +295,121 @@ def crm_twenty_sync_segments(
     console.print(
         Panel(json.dumps(result, indent=2), title="Twenty segment sync", border_style="cyan")
     )
+
+
+@crm_app.command("twenty-ping")
+def crm_twenty_ping(
+    json_output: bool = typer.Option(False, "--json", help="JSON result."),
+) -> None:
+    """Smoke-test Twenty GraphQL (lists one opportunity)."""
+
+    async def _ping() -> dict[str, Any]:
+        from brain_os.data.twenty_settings import get_twenty_config
+        from brain_os.systems.twenty_client import TwentyGraphQLClient
+        from brain_os.systems.twenty_crm_sync import ping_twenty
+
+        cfg = get_twenty_config()
+        if not (cfg.api_url or "").strip() or not cfg.api_key.get_secret_value().strip():
+            return {
+                "ok": False,
+                "error": "Twenty not configured (TWENTY_API_URL / TWENTY_API_KEY).",
+            }
+        client = TwentyGraphQLClient.from_config(cfg)
+        return await ping_twenty(client)
+
+    result = _run(_ping())
+    if json_output:
+        typer.echo(json.dumps(result, indent=2))
+        return
+    if result.get("ok"):
+        console.print(
+            Panel(
+                f"[green]OK[/green] — sample opportunities: {result.get('sample_count', 0)}",
+                title="Twenty ping",
+                border_style="green",
+            )
+        )
+    else:
+        console.print(f"[red]Twenty ping failed:[/red] {result.get('error', result)}")
+        raise typer.Exit(1)
+
+
+@crm_app.command("twenty-export")
+def crm_twenty_export(
+    output: Path = typer.Option(
+        Path("data/reports/twenty_active21_bundle.json"),
+        "--output",
+        "-o",
+        help="Write Demo-Programme bundle JSON here.",
+    ),
+    prefix: str = typer.Option(
+        "[Demo-Programme]",
+        "--prefix",
+        help="Deal title prefix to export from Postgres.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="JSON summary only."),
+) -> None:
+    """Export Demo-Programme deals/contacts/companies from Postgres CRM to a JSON bundle."""
+
+    async def _export() -> dict[str, Any]:
+        from brain_os.data.crm import CRMDatabase
+        from brain_os.systems.twenty_crm_sync import export_active21_bundle
+
+        crm = CRMDatabase()
+        await crm.create_tables()
+        return await export_active21_bundle(prefix=prefix, output_path=output, crm=crm)
+
+    result = _run(_export())
+    if json_output:
+        typer.echo(json.dumps(result, indent=2))
+        return
+    console.print(
+        Panel(
+            "\n".join(
+                [
+                    f"Path: {result.get('path')}",
+                    f"Companies: {result.get('companies', 0)}",
+                    f"Contacts: {result.get('contacts', 0)}",
+                    f"Deals: {result.get('deals', 0)}",
+                ]
+            ),
+            title="Twenty export",
+            border_style="cyan",
+        )
+    )
+
+
+@crm_app.command("twenty-import")
+def crm_twenty_import(
+    bundle: Path = typer.Argument(..., help="Bundle JSON from twenty-export."),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--apply", help="Preview counts vs push to Twenty."
+    ),
+    json_output: bool = typer.Option(False, "--json", help="JSON result."),
+) -> None:
+    """Import a CRM bundle into Twenty (companies, people, opportunities)."""
+
+    async def _import() -> dict[str, Any]:
+        from brain_os.data.twenty_settings import get_twenty_config
+        from brain_os.systems.twenty_client import TwentyGraphQLClient
+        from brain_os.systems.twenty_crm_sync import import_bundle_to_twenty
+
+        if not bundle.is_file():
+            return {"error": f"Bundle not found: {bundle}"}
+        cfg = get_twenty_config()
+        if not (cfg.api_url or "").strip() or not cfg.api_key.get_secret_value().strip():
+            return {"error": "Twenty not configured (TWENTY_API_URL / TWENTY_API_KEY)."}
+        client = TwentyGraphQLClient.from_config(cfg)
+        return await import_bundle_to_twenty(bundle, client, dry_run=dry_run)
+
+    result = _run(_import())
+    if json_output:
+        typer.echo(json.dumps(result, indent=2))
+        return
+    if result.get("error"):
+        console.print(f"[red]{result['error']}[/red]")
+        raise typer.Exit(1)
+    console.print(Panel(json.dumps(result, indent=2), title="Twenty import", border_style="cyan"))
 
 
 @crm_app.command("mailbox-digest")

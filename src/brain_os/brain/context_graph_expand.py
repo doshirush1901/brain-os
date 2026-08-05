@@ -124,6 +124,16 @@ async def fetch_company_graph_context(
             return [], []
         expansion = await kg.expand_company_one_hop(name)
         lines = format_expansion_lines(expansion)
+        try:
+            from brain_os.brain.graph_erp_spine import (
+                company_erp_neighborhood,
+                format_erp_neighborhood_lines,
+            )
+
+            erp = await company_erp_neighborhood(kg, name)
+            lines = list(lines) + format_erp_neighborhood_lines(erp)
+        except (DatabaseError, OSError, ValueError, TypeError, AttributeError):
+            logger.debug("ERP neighborhood append failed name=%s", name[:80], exc_info=True)
         if not lines:
             return [], []
         sources = [

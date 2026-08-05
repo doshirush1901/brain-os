@@ -37,6 +37,11 @@ class EventType(str, Enum):
     EMAIL_CLASSIFIED = "email_classified"
     SCHEDULING_REQUEST_CREATED = "scheduling_request_created"
     CALENDAR_BOOKING_CREATED = "calendar_booking_created"
+    # G2 ERP spine → Neo4j write-through (circulatory)
+    QUOTE_UPSERTED = "quote_upserted"
+    WORK_ORDER_UPSERTED = "work_order_upserted"
+    MACHINE_ASSET_UPSERTED = "machine_asset_upserted"
+    ACCOUNT_EVENT_RECORDED = "account_event_recorded"
 
 
 class SourceStore(str, Enum):
@@ -65,12 +70,23 @@ EventHandler = Callable[[DataEvent], Awaitable[None]]
 class DataEventBus:
     """Async event bus for data-store change propagation."""
 
+    _current: DataEventBus | None = None
+
     def __init__(self, maxsize: int = 2000) -> None:
         self._queue: asyncio.Queue[DataEvent | None] = asyncio.Queue(maxsize=maxsize)
         self._handlers: dict[EventType, list[EventHandler]] = {}
         self._global_handlers: list[EventHandler] = []
         self._running = False
         self._task: asyncio.Task[None] | None = None
+
+    @classmethod
+    def bind(cls, bus: DataEventBus | None) -> None:
+        """Publish the process-wide bus for writers outside CLI/server wiring."""
+        cls._current = bus
+
+    @classmethod
+    def current(cls) -> DataEventBus | None:
+        return cls._current
 
     def subscribe(self, event_type: EventType, handler: EventHandler) -> None:
         """Register a handler for a specific event type."""
@@ -95,6 +111,7 @@ class DataEventBus:
         if self._running:
             return
         self._running = True
+        type(self).bind(self)
         self._task = asyncio.create_task(self._dispatch_loop())
         logger.info("DataEventBus started")
 
@@ -104,6 +121,8 @@ class DataEventBus:
             await self._queue.put(None)
             await self._task
             self._task = None
+        if type(self)._current is self:
+            type(self).bind(None)
         logger.info("DataEventBus stopped")
 
     async def _dispatch_loop(self) -> None:

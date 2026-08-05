@@ -74,7 +74,7 @@ async def learn_pipeline_turn(
         await deps.conversation.add_message(contact_email, channel, "user", raw_input)
         await deps.conversation.add_message(contact_email, channel, "assistant", raw_response)
         _honcho_conv_ok = True
-    except (DatabaseError, Exception):
+    except (DatabaseError, Exception):  # noqa: BLE001 — LEARN step isolation: recorded in error_count, pipeline continues
         error_count += 1
         logger.exception("ConversationMemory recording failed")
 
@@ -83,7 +83,7 @@ async def learn_pipeline_turn(
             from brain_os.brain.honcho_user_model import schedule_sync_turn
 
             schedule_sync_turn(contact_email, raw_input, raw_response)
-        except Exception:
+        except Exception:  # noqa: BLE001 — Honcho transcript scheduling is best-effort
             logger.debug("Honcho transcript scheduling failed", exc_info=True)
 
     # Power/trust progression: successful co-work should strengthen bonds.
@@ -104,16 +104,21 @@ async def learn_pipeline_turn(
                 successful_agents=successful_agents,
                 failed_agents=failed_agents,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 — LEARN step isolation: recorded in error_count, pipeline continues
             error_count += 1
             logger.warning("PowerLevelTracker turn-outcome update failed", exc_info=True)
 
     # Durable fact extraction into long-term semantic memory
     mem0_attempted = False
+    mem0_skipped_no_facts = False
     deduped_facts: list[str] = []
     if deps.long_term is not None:
         try:
+            from brain_os.memory.store_policy import is_query_echo
+
             fact_candidates: list[str] = _extract_teaching_facts(raw_input)
+            # Explicit teachings are verbatim by design — exempt from echo check.
+            teaching_count = len(fact_candidates)
             from brain_os.services.llm_client import get_llm_client
 
             _fact_llm = get_llm_client()
@@ -140,10 +145,31 @@ async def learn_pipeline_turn(
             except TimeoutError:
                 logger.warning("Fact extraction timed out after 8s; using deterministic facts only")
 
+            # Quality gates: salience + echo filter for LLM-extracted facts.
+            from brain_os.memory.store_policy import evaluate_mem_store
+
+            gated: list[str] = []
+            for idx, fact in enumerate(fact_candidates):
+                decision = evaluate_mem_store(
+                    fact,
+                    source=f"conversation:{contact_email}",
+                    metadata={
+                        "type": "fact",
+                        "confidence": 0.7,
+                        "memory_category": "fact",
+                    },
+                    category="fact",
+                )
+                if not decision.allow:
+                    continue
+                if idx >= teaching_count and is_query_echo(fact, raw_input):
+                    continue
+                gated.append(fact)
+
             # Preserve order while deduplicating small fact sets.
             deduped: list[str] = []
             seen: set[str] = set()
-            for fact in fact_candidates:
+            for fact in gated:
                 normalized = re.sub(r"\s+", " ", fact).strip().lower()
                 if normalized and normalized not in seen:
                     deduped.append(fact.strip())
@@ -158,22 +184,29 @@ async def learn_pipeline_turn(
                     confidence=0.7,
                     mem0_user_id=contact_email,
                     run_id=run_id,
+                    category="fact",
                 )
             if deduped:
                 logger.debug(
                     "LEARN | stored %d durable facts for %s", len(deduped[:8]), contact_email
                 )
-            elif len((raw_input or "").strip()) >= 20:
-                # Guarantee at least one Mem0 write attempt for substantial turns.
-                mem0_attempted = True
-                await deps.long_term.store_fact(
-                    f"Conversation turn summary: user discussed '{raw_input[:180]}'",
-                    source=f"conversation:{contact_email}",
-                    confidence=0.6,
-                    mem0_user_id=contact_email,
-                    run_id=run_id,
+            else:
+                # No durable facts is a deliberate, contract-compliant skip —
+                # the turn content still lands in Qdrant below. Storing a
+                # generic "Conversation turn summary" memory polluted Mem0.
+                mem0_skipped_no_facts = True
+                record_receipt(
+                    build_receipt(
+                        store="mem0",
+                        attempted=False,
+                        success=False,
+                        operation="pipeline.fact_extraction",
+                        run_id=run_id,
+                        reason="no_durable_facts",
+                        metadata={"user_id": contact_email},
+                    )
                 )
-        except (LLMError, Exception):
+        except (LLMError, Exception):  # noqa: BLE001 — LEARN step isolation: recorded in error_count, pipeline continues
             error_count += 1
             logger.debug("Fact extraction failed (non-critical)", exc_info=True)
 
@@ -181,6 +214,22 @@ async def learn_pipeline_turn(
         route_method in {"llm", "deterministic", "quick_pipeline", "fast_path"}
         and len((raw_input or "").strip()) >= 20
     )
+
+    # Episode capture audit (Phase 3 biology upgrade): every turn is counted;
+    # ineligible turns log a drop reason so "dreams of nothing" is diagnosable.
+    try:
+        from brain_os.memory.episode_capture_metrics import record_drop, record_seen
+
+        record_seen()
+        if not eligible_turn:
+            reason = (
+                "input_too_short"
+                if len((raw_input or "").strip()) < 20
+                else f"route_{route_method}"
+            )
+            record_drop(f"not_eligible_turn:{reason}")
+    except Exception:  # noqa: BLE001 — episode capture audit is best-effort telemetry
+        logger.debug("Episode capture audit failed (non-critical)", exc_info=True)
 
     if eligible_turn and deps.relationship is not None and contact_email and "@" in contact_email:
         try:
@@ -206,7 +255,7 @@ async def learn_pipeline_turn(
                     episodic=deps.episodic,
                     crm=deps.crm,
                 )
-        except Exception:
+        except Exception:  # noqa: BLE001 — relationship/memory-block refresh is best-effort
             logger.debug("Relationship / memory block LEARN refresh failed", exc_info=True)
 
     if deps.qdrant is None:
@@ -268,7 +317,7 @@ async def learn_pipeline_turn(
                     metadata={"route_method": route_method},
                 )
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 — store write failure is recorded as a receipt and retried
             q_receipt = build_receipt(
                 store="qdrant",
                 attempted=True,
@@ -375,7 +424,7 @@ async def learn_pipeline_turn(
                 )
                 record_receipt(g_receipt)
                 enqueue_retry(g_receipt)
-        except Exception:
+        except Exception:  # noqa: BLE001 — store write failure is recorded as a receipt and retried
             g_receipt = build_receipt(
                 store="neo4j",
                 attempted=True,
@@ -413,7 +462,7 @@ async def learn_pipeline_turn(
                         default=str,
                     ),
                 )
-        except (DatabaseError, Exception):
+        except (DatabaseError, Exception):  # noqa: BLE001 — LEARN step isolation: recorded in error_count, pipeline continues
             error_count += 1
             logger.exception("CRM interaction logging failed")
 
@@ -434,7 +483,7 @@ async def learn_pipeline_turn(
                     },
                 )
             )
-        except (BrainOSError, Exception):
+        except (BrainOSError, Exception):  # noqa: BLE001 — LEARN step isolation: recorded in error_count, pipeline continues
             error_count += 1
             logger.exception("MusculoskeletalSystem recording failed")
 
@@ -444,7 +493,7 @@ async def learn_pipeline_turn(
             extracted = await deps.goals.extract_slots(active_goal, raw_input)
             if extracted:
                 await deps.goals.update_goal(active_goal.id, extracted)
-        except (DatabaseError, Exception):
+        except (DatabaseError, Exception):  # noqa: BLE001 — LEARN step isolation: recorded in error_count, pipeline continues
             error_count += 1
             logger.exception("GoalManager slot update failed")
 
@@ -455,7 +504,7 @@ async def learn_pipeline_turn(
                 resolved_input,
                 {"contact_id": contact_email, "channel": channel},
             )
-        except (DatabaseError, Exception):
+        except (DatabaseError, Exception):  # noqa: BLE001 — LEARN step isolation: recorded in error_count, pipeline continues
             error_count += 1
             logger.exception("GoalManager detection failed")
 
@@ -466,7 +515,7 @@ async def learn_pipeline_turn(
                 resolved_input,
                 agents_used,
             )
-        except (DatabaseError, Exception):
+        except (DatabaseError, Exception):  # noqa: BLE001 — LEARN step isolation: recorded in error_count, pipeline continues
             error_count += 1
             logger.exception("ProceduralMemory learning failed")
 
@@ -478,7 +527,7 @@ async def learn_pipeline_turn(
                 f"Reflect on this interaction: {raw_input[:300]}",
                 {"response": raw_response[:300], "route": route_method},
             )
-        except (ToolExecutionError, Exception):
+        except (ToolExecutionError, Exception):  # noqa: BLE001 — LEARN step isolation: recorded in error_count, pipeline continues
             error_count += 1
             logger.warning("Sophia reflection failed", exc_info=True)
 
@@ -497,7 +546,7 @@ async def learn_pipeline_turn(
     except TimeoutError:
         error_count += 1
         logger.debug("RealTimeObserver timed out (10s) — skipping")
-    except (BrainOSError, Exception):
+    except (BrainOSError, Exception):  # noqa: BLE001 — LEARN step isolation: recorded in error_count, pipeline continues
         error_count += 1
         logger.warning("RealTimeObserver not available", exc_info=True)
 
@@ -507,7 +556,7 @@ async def learn_pipeline_turn(
             deps.endocrine.boost("growth_signal", 0.02)
             if route_method == "deterministic":
                 deps.endocrine.boost("confidence", 0.01)
-        except (BrainOSError, Exception):
+        except (BrainOSError, Exception):  # noqa: BLE001 — LEARN step isolation: recorded in error_count, pipeline continues
             error_count += 1
             logger.warning("Endocrine update failed", exc_info=True)
 
@@ -519,13 +568,18 @@ async def learn_pipeline_turn(
                 raw_input,
                 raw_response,
             )
-        except (DatabaseError, Exception):
+        except (DatabaseError, Exception):  # noqa: BLE001 — LEARN step isolation: recorded in error_count, pipeline continues
             error_count += 1
             logger.exception("UnifiedContextManager recording failed")
 
     duration_ms = round((time.monotonic() - learn_t0) * 1000, 1)
-    contract_pass = (not eligible_turn) or (mem0_attempted and qdrant_attempted and neo4j_attempted)
+    mem0_ok = mem0_attempted or mem0_skipped_no_facts
+    contract_pass = (not eligible_turn) or (mem0_ok and qdrant_attempted and neo4j_attempted)
     deps.learn_metrics["runs"] += 1
+    if mem0_skipped_no_facts:
+        deps.learn_metrics["mem0_skipped_no_facts"] = (
+            int(deps.learn_metrics.get("mem0_skipped_no_facts", 0)) + 1
+        )
     deps.learn_metrics["last_duration_ms"] = duration_ms
     deps.learn_metrics["last_error_count"] = error_count
     deps.learn_metrics["last_contract_pass"] = contract_pass

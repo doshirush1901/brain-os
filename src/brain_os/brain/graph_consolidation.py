@@ -8,9 +8,11 @@ in a configurable window.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -18,12 +20,52 @@ from typing import Any
 import aiofiles
 
 from brain_os.brain.knowledge_graph import KnowledgeGraph
+from brain_os.config import data_root
 from brain_os.exceptions import DatabaseError, BrainOSError
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_LOG_PATH = Path("data/brain/retrieval_log.jsonl")
-_DEFAULT_COMPANY_CANDIDATES = Path("data/brain/company_name_normalization_candidates.json")
+
+def _default_retrieval_log_path() -> Path:
+    return data_root() / "brain" / "retrieval_log.jsonl"
+
+
+def _default_company_candidates_path() -> Path:
+    return data_root() / "brain" / "company_name_normalization_candidates.json"
+
+
+_DEFAULT_LOG_PATH = Path("brain/retrieval_log.jsonl")  # resolved via data_root in __init__
+_DEFAULT_COMPANY_CANDIDATES = Path("brain/company_name_normalization_candidates.json")
+_CO_ACCESS_MIN_COUNT = 3
+_TUNE_RELATIONSHIP_BATCH_SIZE = 75
+
+_BATCH_CO_RELEVANT_CYPHER = """
+UNWIND $pairs AS pair
+CALL {
+    WITH pair
+    MATCH (a)
+    WHERE (a.name = pair.a OR a.email = pair.a OR a.model = pair.a OR a.source = pair.a)
+          AND size(labels(a)) > 0
+    MATCH (b)
+    WHERE (b.name = pair.b OR b.email = pair.b OR b.model = pair.b OR b.source = pair.b)
+          AND size(labels(b)) > 0
+    WITH a, b, pair.boost AS boost
+    LIMIT 1
+    MERGE (a)-[r:CO_RELEVANT]-(b)
+    SET r.strength = COALESCE(r.strength, 0) + boost,
+        r.updated_at = $now
+    RETURN 1 AS created
+}
+RETURN coalesce(sum(created), 0) AS strengthened
+"""
+
+
+@dataclass(frozen=True)
+class RetrievalLogSnapshot:
+    """Single-pass parse of ``retrieval_log.jsonl`` for dream graph stages."""
+
+    co_access: dict[str, int] = field(default_factory=dict)
+    active_entities: set[str] = field(default_factory=set)
 
 
 class GraphConsolidation:
@@ -32,12 +74,22 @@ class GraphConsolidation:
     def __init__(
         self,
         knowledge_graph: KnowledgeGraph,
-        retrieval_log_path: Path = _DEFAULT_LOG_PATH,
-        company_candidates_path: Path = _DEFAULT_COMPANY_CANDIDATES,
+        retrieval_log_path: Path | None = None,
+        company_candidates_path: Path | None = None,
     ) -> None:
         self._graph = knowledge_graph
-        self._log_path = retrieval_log_path
-        self._company_candidates_path = company_candidates_path
+        if retrieval_log_path is None:
+            self._log_path = _default_retrieval_log_path()
+        elif not retrieval_log_path.is_absolute():
+            self._log_path = data_root() / retrieval_log_path
+        else:
+            self._log_path = retrieval_log_path
+        if company_candidates_path is None:
+            self._company_candidates_path = _default_company_candidates_path()
+        elif not company_candidates_path.is_absolute():
+            self._company_candidates_path = data_root() / company_candidates_path
+        else:
+            self._company_candidates_path = company_candidates_path
 
     # ── logging ───────────────────────────────────────────────────────────
 
@@ -46,35 +98,48 @@ class GraphConsolidation:
         query: str,
         chunks_retrieved: list[str],
         source_types: list[str],
+        stitch_stats: dict[str, Any] | None = None,
     ) -> None:
-        """Append a retrieval event to the JSONL log."""
-        entry = {
+        """Append a retrieval event to the JSONL log (size-rotated)."""
+        entry: dict[str, Any] = {
             "timestamp": datetime.now(UTC).isoformat(),
             "query": query,
             "chunks": chunks_retrieved,
             "source_types": source_types,
         }
+        if stitch_stats:
+            entry.update(stitch_stats)
         try:
-            self._log_path.parent.mkdir(parents=True, exist_ok=True)
-            line = json.dumps(entry, default=str) + "\n"
-            async with aiofiles.open(self._log_path, mode="a", encoding="utf-8") as f:
-                await f.write(line)
+            from brain_os.systems.jsonl_log import append_jsonl
+
+            # Sync append + rotate; retrieval logging must stay cheap and durable.
+            await asyncio.to_thread(append_jsonl, self._log_path, entry, rotate_mb=50)
         except OSError:
             logger.exception("Failed to write retrieval log entry")
+        except Exception:
+            # Fallback without rotation if thread/import fails.
+            try:
+                self._log_path.parent.mkdir(parents=True, exist_ok=True)
+                line = json.dumps(entry, default=str) + "\n"
+                async with aiofiles.open(self._log_path, mode="a", encoding="utf-8") as f:
+                    await f.write(line)
+            except OSError:
+                logger.exception("Failed to write retrieval log entry")
 
     # ── analysis ──────────────────────────────────────────────────────────
 
-    async def build_co_access_matrix(self) -> dict:
-        """Analyze the retrieval log to find chunks frequently retrieved together.
-
-        Returns a dict mapping ``(chunk_a, chunk_b)`` tuple-keys (serialized
-        as ``"chunk_a|||chunk_b"``) to co-occurrence counts.
-        """
+    async def load_retrieval_log_snapshot(
+        self, *, days_threshold: int = 30
+    ) -> RetrievalLogSnapshot:
+        """Read the retrieval log once; build co-access matrix and active-entity set."""
         if not self._log_path.exists():
-            return {}
+            return RetrievalLogSnapshot()
+
+        co: dict[str, int] = defaultdict(int)
+        active_entities: set[str] = set()
+        cutoff = datetime.now(UTC)
 
         try:
-            co: dict[str, int] = defaultdict(int)
             async with aiofiles.open(self._log_path, encoding="utf-8") as f:
                 raw = await f.read()
             for raw_line in raw.splitlines():
@@ -86,97 +151,116 @@ class GraphConsolidation:
                 except json.JSONDecodeError:
                     continue
                 chunks = entry.get("chunks", [])
-                for i, a in enumerate(chunks):
-                    for b in chunks[i + 1 :]:
-                        key = "|||".join(sorted([a, b]))
-                        co[key] += 1
-            co_access = dict(co)
+                if isinstance(chunks, list):
+                    for i, a in enumerate(chunks):
+                        if not isinstance(a, str):
+                            continue
+                        for b in chunks[i + 1 :]:
+                            if not isinstance(b, str):
+                                continue
+                            key = "|||".join(sorted([a, b]))
+                            co[key] += 1
+                ts_str = entry.get("timestamp", "")
+                try:
+                    ts = datetime.fromisoformat(ts_str)
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=UTC)
+                    age_days = (cutoff - ts).days
+                    if age_days <= days_threshold and isinstance(chunks, list):
+                        for chunk in chunks:
+                            if isinstance(chunk, str):
+                                active_entities.add(chunk)
+                except (ValueError, TypeError):
+                    pass
         except OSError:
             logger.exception("Failed to read retrieval log")
-            co_access = {}
+            return RetrievalLogSnapshot()
 
-        logger.info("Co-access matrix: %d pairs analyzed", len(co_access))
-        return co_access
+        co_access = dict(co)
+        logger.info(
+            "Retrieval log snapshot: %d co-access pairs, %d active entities",
+            len(co_access),
+            len(active_entities),
+        )
+        return RetrievalLogSnapshot(co_access=co_access, active_entities=active_entities)
 
-    async def tune_relationships(self, co_access: dict) -> None:
+    async def build_co_access_matrix(self) -> dict:
+        """Analyze the retrieval log to find chunks frequently retrieved together.
+
+        Returns a dict mapping ``(chunk_a, chunk_b)`` tuple-keys (serialized
+        as ``"chunk_a|||chunk_b"``) to co-occurrence counts.
+        """
+        snapshot = await self.load_retrieval_log_snapshot()
+        return snapshot.co_access
+
+    async def tune_relationships(self, co_access: dict) -> int:
         """Strengthen relationships between co-accessed entities in Neo4j.
 
         Pairs accessed together >= 3 times get a ``CO_RELEVANT`` edge with
         a ``strength`` property.  Only links *existing* labeled nodes — never
-        creates label-less orphans.
+        creates label-less orphans.  Writes are batched via ``UNWIND``.
         """
-        strengthened = 0
+        now = datetime.now(UTC).isoformat()
+        pair_rows: list[dict[str, Any]] = []
         for pair_key, count in co_access.items():
-            if count < 3:
+            if count < _CO_ACCESS_MIN_COUNT:
                 continue
             parts = pair_key.split("|||")
             if len(parts) != 2:
                 continue
-            entity_a, entity_b = parts
+            pair_rows.append(
+                {
+                    "a": parts[0],
+                    "b": parts[1],
+                    "boost": min(count, 10),
+                }
+            )
 
+        if not pair_rows:
+            return 0
+
+        strengthened = 0
+        for offset in range(0, len(pair_rows), _TUNE_RELATIONSHIP_BATCH_SIZE):
+            batch = pair_rows[offset : offset + _TUNE_RELATIONSHIP_BATCH_SIZE]
             try:
                 result = await self._graph._run_cypher_write(
-                    """
-                    MATCH (a) WHERE (a.name = $a OR a.email = $a OR a.model = $a
-                                     OR a.source = $a)
-                                    AND size(labels(a)) > 0
-                    MATCH (b) WHERE (b.name = $b OR b.email = $b OR b.model = $b
-                                     OR b.source = $b)
-                                    AND size(labels(b)) > 0
-                    WITH a, b LIMIT 1
-                    MERGE (a)-[r:CO_RELEVANT]-(b)
-                    SET r.strength = COALESCE(r.strength, 0) + $boost,
-                        r.updated_at = $now
-                    RETURN count(r) AS created
-                    """,
-                    params={
-                        "a": entity_a,
-                        "b": entity_b,
-                        "boost": min(count, 10),
-                        "now": datetime.now(UTC).isoformat(),
-                    },
+                    _BATCH_CO_RELEVANT_CYPHER,
+                    params={"pairs": batch, "now": now},
                 )
-                if result and result[0].get("created", 0) > 0:
-                    strengthened += 1
+                if result:
+                    strengthened += int(result[0].get("strengthened", 0) or 0)
             except DatabaseError:
-                logger.debug("Failed to strengthen edge %s <-> %s", entity_a, entity_b)
+                logger.debug(
+                    "Failed batched co-access tune (offset=%d, size=%d)",
+                    offset,
+                    len(batch),
+                    exc_info=True,
+                )
 
-        logger.info("Tuned %d co-access relationships", strengthened)
+        logger.info(
+            "Tuned %d co-access relationships (%d pairs in %d batch(es))",
+            strengthened,
+            len(pair_rows),
+            (len(pair_rows) + _TUNE_RELATIONSHIP_BATCH_SIZE - 1) // _TUNE_RELATIONSHIP_BATCH_SIZE,
+        )
+        return strengthened
 
-    async def decay_stale_nodes(self, days_threshold: int = 30) -> None:
+    async def decay_stale_nodes(
+        self,
+        days_threshold: int = 30,
+        *,
+        active_entities: set[str] | None = None,
+    ) -> None:
         """Mark nodes not accessed in *days_threshold* days as stale.
 
         Sets a ``stale`` property to ``true`` and records the decay timestamp.
+        When *active_entities* is provided, the retrieval log is not read again.
         """
-        cutoff = datetime.now(UTC)
-        accessed_entities: set[str] = set()
-        if not self._log_path.exists():
-            pass
+        if active_entities is None:
+            snapshot = await self.load_retrieval_log_snapshot(days_threshold=days_threshold)
+            accessed_entities = snapshot.active_entities
         else:
-            try:
-                async with aiofiles.open(self._log_path, encoding="utf-8") as f:
-                    raw = await f.read()
-                for raw_line in raw.splitlines():
-                    raw_line = raw_line.strip()
-                    if not raw_line:
-                        continue
-                    try:
-                        entry = json.loads(raw_line)
-                    except json.JSONDecodeError:
-                        continue
-                    ts_str = entry.get("timestamp", "")
-                    try:
-                        ts = datetime.fromisoformat(ts_str)
-                        if ts.tzinfo is None:
-                            ts = ts.replace(tzinfo=UTC)
-                    except (ValueError, TypeError):
-                        continue
-                    age_days = (cutoff - ts).days
-                    if age_days <= days_threshold:
-                        for chunk in entry.get("chunks", []):
-                            accessed_entities.add(chunk)
-            except OSError:
-                logger.exception("Failed to read retrieval log for decay analysis")
+            accessed_entities = active_entities
 
         try:
             result = await self._graph._run_cypher_write(
@@ -309,24 +393,29 @@ class GraphConsolidation:
             )
             logger.info("Relationship cleanup removed %d weak stale CO_RELEVANT edges", removed)
             return removed
-        except DatabaseError as exc:
+        except DatabaseError:
             logger.exception("Relationship cleanup failed")
             return 0
 
     # ── full pipeline ─────────────────────────────────────────────────────
 
-    async def run_consolidation(self) -> dict:
+    async def run_consolidation(
+        self,
+        snapshot: RetrievalLogSnapshot | None = None,
+    ) -> dict:
         """Execute the full consolidation pipeline and return stats."""
         stats: dict[str, Any] = {}
 
         try:
-            co_access = await self.build_co_access_matrix()
+            if snapshot is None:
+                snapshot = await self.load_retrieval_log_snapshot()
+            co_access = snapshot.co_access
             stats["co_access_pairs"] = len(co_access)
 
-            await self.tune_relationships(co_access)
+            stats["relationships_strengthened"] = await self.tune_relationships(co_access)
             stats["tuning"] = "completed"
 
-            await self.decay_stale_nodes()
+            await self.decay_stale_nodes(active_entities=snapshot.active_entities)
             stats["decay"] = "completed"
 
             stats["company_id_merges"] = await self.merge_duplicate_company_ids()

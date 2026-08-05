@@ -66,6 +66,16 @@ _FE_FIELD_PARAMS: dict[str, tuple[str, ...]] = {
         "base_case",
         "scenarios",
     ),
+    "margin_sensitivity": (
+        "mode",
+        "base_case",
+        "bump_pct",
+        "cashflows",
+        "discount_rate",
+        "initial_outlay",
+        "rate_bump",
+        "cf_bump_pct",
+    ),
     "customer_credit_risk_score": (
         "company_id",
         "domain",
@@ -170,11 +180,17 @@ class Plutus(BaseAgent):
         self.register_tool(
             AgentTool(
                 name="generate_invoice",
-                description="Generate an invoice for a customer, optionally from a quote.",
+                description=(
+                    "Generate a commercial proforma/tax invoice for a work-order "
+                    "payment milestone (registry + PDF in WO invoices/ folder). "
+                    "Does not post to Tally. Does not send email."
+                ),
                 parameters={
-                    "customer": "Customer name or identifier",
-                    "quote_id": "Optional quote ID to base the invoice on",
-                    "items": "Optional comma-separated line items",
+                    "wo": "Work order number (e.g. 26002)",
+                    "milestone_seq": "Optional milestone seq (default: first unpaid)",
+                    "kind": "proforma or tax_invoice",
+                    "customer": "Optional customer name (used to resolve WO if wo omitted)",
+                    "quote_id": "Optional quote ID to resolve linked WO",
                 },
                 handler=self._tool_generate_invoice,
             )
@@ -252,6 +268,12 @@ class Plutus(BaseAgent):
                 "Deterministic best/base/worst-style scenario stress on price, volume, cost, FX.",
                 fe.scenario_engine,
                 self._tool_scenario_engine,
+            ),
+            (
+                "margin_sensitivity",
+                "FIN_SENSITIVITY: finite-difference elasticities for scenario margin or NPV drivers.",
+                fe.margin_sensitivity,
+                self._tool_margin_sensitivity,
             ),
             (
                 "customer_credit_risk_score",
@@ -397,6 +419,23 @@ class Plutus(BaseAgent):
         )
         return self._fe_envelope_json(fe.scenario_engine, payload)
 
+    async def _tool_margin_sensitivity(
+        self,
+        payload_json: str = "",
+        mode: str = "",
+        base_case: str = "",
+        bump_pct: str = "",
+        cashflows: str = "",
+        discount_rate: str = "",
+        initial_outlay: str = "",
+        rate_bump: str = "",
+        cf_bump_pct: str = "",
+    ) -> str:
+        payload = self._build_fe_payload(
+            payload_json, locals(), _FE_FIELD_PARAMS["margin_sensitivity"]
+        )
+        return self._fe_envelope_json(fe.margin_sensitivity, payload)
+
     async def _tool_customer_credit_risk_score(
         self,
         payload_json: str = "",
@@ -432,12 +471,22 @@ class Plutus(BaseAgent):
         return json.dumps(deal, default=str) if deal else f"Deal '{deal_id}' not found."
 
     async def _tool_generate_invoice(
-        self, customer: str, quote_id: str = "", items: str = ""
+        self,
+        wo: str = "",
+        milestone_seq: str = "",
+        kind: str = "proforma",
+        customer: str = "",
+        quote_id: str = "",
+        items: str = "",
     ) -> str:
         return await self.use_skill(
             "generate_invoice",
+            wo=wo,
+            milestone_seq=milestone_seq,
+            kind=kind,
             customer=customer,
             quote_id=quote_id,
+            items=items,
         )
 
     async def _tool_calculate_quote_skill(self, machine_model: str, configuration: str = "") -> str:
@@ -474,6 +523,9 @@ class Plutus(BaseAgent):
         if task == "generate_invoice":
             return await self.use_skill(
                 "generate_invoice",
+                wo=ctx.get("wo") or ctx.get("wo_number") or "",
+                milestone_seq=ctx.get("milestone_seq", ""),
+                kind=ctx.get("kind", "proforma"),
                 customer=ctx.get("customer", ""),
                 quote_id=ctx.get("quote_id", ""),
                 items=ctx.get("items", []),

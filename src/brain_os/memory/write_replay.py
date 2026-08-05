@@ -17,10 +17,21 @@ async def replay_mem0_store(row: dict[str, Any]) -> bool:
     from brain_os.memory.long_term import LongTermMemory
 
     mem = LongTermMemory()
-    out = await mem.store(
-        body, user_id=uid, metadata=outbound_meta, run_id=str(row.get("run_id") or "")
+    cat = str(outbound_meta.get("memory_category") or "session")
+    outbound_meta.setdefault("memory_category", cat)
+    gated = await mem.store_gated(
+        body,
+        user_id=uid,
+        metadata=outbound_meta,
+        run_id=str(row.get("run_id") or ""),
+        source=str(outbound_meta.get("source") or "write_replay"),
+        category=cat,
+        bypass_salience=True,
     )
-    return isinstance(out, list) and len(out) > 0
+    if gated.get("skipped"):
+        return False
+    entries = gated.get("entries") or []
+    return isinstance(entries, list) and len(entries) > 0
 
 
 def install_mem0_write_replay_handler() -> None:

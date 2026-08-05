@@ -7,7 +7,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-import aiosqlite  # noqa: F401 — characterization tests patch module connect
+import aiosqlite
 from langfuse.decorators import observe
 from pydantic import BaseModel, Field
 
@@ -110,6 +110,7 @@ class RelationshipMemory:
                 interaction.content,
                 MemorableMoments,
                 name="relationship.moments",
+                model_tier="cheap",
             )
             for m in result.moments:
                 if isinstance(m, MemorableMoment):

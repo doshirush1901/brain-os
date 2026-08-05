@@ -21,6 +21,7 @@ from typing import Any
 import httpx
 from anthropic import AnthropicError as _AnthropicError
 from langfuse.decorators import observe
+from neo4j.exceptions import Neo4jError
 from openai import OpenAIError as _OpenAIError
 from pydantic import ValidationError
 
@@ -36,6 +37,7 @@ from brain_os.brain.quality_filter import QualityFilter
 from brain_os.brain.write_contract import build_receipt, enqueue_retry, record_receipt
 from brain_os.config import get_settings
 from brain_os.data.models import Email, KnowledgeItem
+from brain_os.exceptions import DatabaseError
 from brain_os.prompt_loader import load_prompt
 from brain_os.schemas.llm_outputs import (
     DigestiveSummary,
@@ -52,7 +54,15 @@ _SUMMARIZE_SYSTEM_PROMPT = load_prompt("digestive_summarize")
 _EMAIL_META_SYSTEM_PROMPT = load_prompt("digestive_email_meta")
 _EXTRACT_CONTACTS_SYSTEM_PROMPT = load_prompt("digestive_extract_contacts")
 
-_GRAPH_WRITE_ERRORS = (RuntimeError, ValueError, TypeError, AttributeError, OSError)
+_GRAPH_WRITE_ERRORS = (
+    DatabaseError,
+    Neo4jError,
+    RuntimeError,
+    ValueError,
+    TypeError,
+    AttributeError,
+    OSError,
+)
 _DIGESTIVE_INGEST_ERRORS: tuple[type[BaseException], ...] = (
     httpx.HTTPError,
     OSError,
@@ -67,6 +77,19 @@ _DIGESTIVE_INGEST_ERRORS: tuple[type[BaseException], ...] = (
     _OpenAIError,
     _AnthropicError,
     ValidationError,
+)
+_EMAIL_METADATA_ERRORS = (
+    httpx.HTTPError,
+    OSError,
+    RuntimeError,
+    ValueError,
+    TypeError,
+    AttributeError,
+    KeyError,
+    json.JSONDecodeError,
+    ValidationError,
+    _OpenAIError,
+    _AnthropicError,
 )
 
 
@@ -186,6 +209,7 @@ class DigestiveSystem:
             prepared,
             NutrientClassification,
             name="digestive.classify",
+            model_tier="cheap",
             max_tokens=8192,
             provider=self._structured_provider,
             **self._digestive_model_kw(),
@@ -333,6 +357,7 @@ class DigestiveSystem:
             text,
             DigestiveSummary,
             name="digestive.summarize",
+            model_tier="cheap",
             max_tokens=8192,
             provider=self._structured_provider,
             **self._digestive_model_kw(),
@@ -492,7 +517,9 @@ class DigestiveSystem:
             entity_refs.append(("Company", company["name"]))
 
         for person in extracted.get("people", []):
-            if person.get("name"):
+            if not person.get("name"):
+                continue
+            try:
                 await self._graph.add_person(
                     name=person["name"],
                     email=person.get("email", ""),
@@ -500,20 +527,36 @@ class DigestiveSystem:
                     role=person.get("role", ""),
                     source_id=source_id,
                 )
-                counts["people"] += 1
-                if person.get("email"):
-                    entity_refs.append(("Person", person["email"]))
+            except _GRAPH_WRITE_ERRORS:
+                logger.warning(
+                    "Failed to add person %s during ingest",
+                    person.get("name"),
+                    exc_info=True,
+                )
+                continue
+            counts["people"] += 1
+            if person.get("email"):
+                entity_refs.append(("Person", person["email"]))
 
         for machine in extracted.get("machines", []):
-            if machine.get("model"):
+            if not machine.get("model"):
+                continue
+            try:
                 await self._graph.add_machine(
                     model=machine["model"],
                     category=machine.get("category", ""),
                     description=machine.get("description", ""),
                     source_id=source_id,
                 )
-                counts["machines"] += 1
-                entity_refs.append(("Machine", machine["model"]))
+            except _GRAPH_WRITE_ERRORS:
+                logger.warning(
+                    "Failed to add machine %s during ingest",
+                    machine.get("model"),
+                    exc_info=True,
+                )
+                continue
+            counts["machines"] += 1
+            entity_refs.append(("Machine", machine["model"]))
 
         rel_count = 0
         for rel in extracted.get("relationships", []):
@@ -565,6 +608,27 @@ class DigestiveSystem:
                 "entities_found": {"companies": 0, "people": 0, "machines": 0},
                 "processing_time": 0.0,
             }
+
+        from brain_os.brain.email_text_cleaner import (
+            EMAIL_INGEST_VERSION,
+            clean_email_text,
+            looks_like_email_source,
+        )
+
+        if looks_like_email_source(
+            source=source, source_category=source_category, doc_type=doc_type
+        ):
+            raw_data = clean_email_text(raw_data)
+            if not raw_data.strip():
+                return {
+                    "nutrients_extracted": {"protein": 0, "carbs": 0, "waste": 0},
+                    "chunks_created": 0,
+                    "entities_found": {"companies": 0, "people": 0, "machines": 0},
+                    "processing_time": 0.0,
+                }
+            extra_metadata = dict(extra_metadata or {})
+            extra_metadata.setdefault("ingest_version", EMAIL_INGEST_VERSION)
+            extra_metadata.setdefault("doc_type", doc_type or "email")
 
         try:
             # STOMACH
@@ -673,6 +737,15 @@ class DigestiveSystem:
                 elapsed,
             )
 
+            from brain_os.brain.digestion import DEFAULT_METRICS_PATH, record_meal
+
+            record_meal(
+                source_id or source,
+                status="ok" if chunks_created > 0 else "skipped",
+                chunks=chunks_created,
+                metrics_path=DEFAULT_METRICS_PATH,
+            )
+
             return {
                 "nutrients_extracted": nutrient_counts,
                 "chunks_created": chunks_created,
@@ -767,6 +840,15 @@ class DigestiveSystem:
             if neo_receipt.attempted and not neo_receipt.success:
                 enqueue_retry(neo_receipt)
             elapsed = time.monotonic() - start
+            from brain_os.brain.digestion import DEFAULT_METRICS_PATH, record_meal
+
+            record_meal(
+                source_id or source,
+                status="ok" if chunks_created > 0 else "skipped",
+                chunks=chunks_created,
+                parse_path="fallback_raw",
+                metrics_path=DEFAULT_METRICS_PATH,
+            )
             return {
                 "nutrients_extracted": {"protein": 1, "carbs": 0, "waste": 0},
                 "chunks_created": chunks_created,
@@ -779,13 +861,44 @@ class DigestiveSystem:
     @observe()
     async def ingest_email(self, email: Email) -> dict[str, Any]:
         """Ingest an email through the full pipeline with extra metadata extraction."""
+        from brain_os.brain.email_text_cleaner import EMAIL_INGEST_VERSION, clean_email_text
+
+        cleaned_body = clean_email_text(email.body)
+        email_date = ""
+        if getattr(email, "received_at", None) is not None:
+            try:
+                email_date = email.received_at.date().isoformat()
+            except (AttributeError, TypeError, ValueError):
+                email_date = str(email.received_at)[:10]
+        extra_metadata = {
+            "email_id": email.id,
+            "subject": email.subject,
+            "from_email": email.from_address,
+            "to_email": email.to_address,
+            "thread_id": email.thread_id or "",
+            "doc_type": "email",
+            "ingest_version": EMAIL_INGEST_VERSION,
+        }
+        if email_date:
+            extra_metadata["email_date"] = email_date
         result = await self.ingest(
-            raw_data=email.body,
+            raw_data=cleaned_body or email.body,
             source=email.from_address,
             source_category="email",
+            source_id=email.id,
+            doc_type="email",
+            extra_metadata=extra_metadata,
         )
 
-        email_metadata = await self._extract_email_metadata(email.body)
+        try:
+            email_metadata = await self._extract_email_metadata(cleaned_body or email.body)
+        except _EMAIL_METADATA_ERRORS as exc:
+            logger.warning(
+                "Email metadata extraction failed (provider=%s): %s",
+                self._structured_provider,
+                exc,
+            )
+            email_metadata = {"extraction_error": str(exc)[:200]}
         result["email_metadata"] = email_metadata
         result["email_id"] = email.id
         result["subject"] = email.subject
@@ -799,6 +912,7 @@ class DigestiveSystem:
             body[:12_000],
             EmailMetadata,
             name="digestive.email_meta",
+            model_tier="cheap",
             max_tokens=8192,
             provider=self._structured_provider,
             **self._digestive_model_kw(),
@@ -828,6 +942,7 @@ class DigestiveSystem:
             prepared,
             ExtractedContacts,
             name="digestive.extract_contacts",
+            model_tier="cheap",
             max_tokens=4096,
             provider=self._structured_provider,
             **self._digestive_model_kw(),

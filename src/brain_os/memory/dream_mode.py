@@ -1,26 +1,7 @@
 """Dream mode — nightly memory consolidation, gap detection, and creative synthesis.
-
-Implements an 11-stage dream cycle:
-  0.   Deferred Ingestion — ingest files accessed via Alexandros fallback.
-  0.5  Sleep Training — run Nemesis corrections on pending items.
-  0.55 Pending Memory — drain operator heartbeat / CLI hints into Mem0.
-  1.   Memory Ingestion — pull recent interactions from the CRM.
-  2.   Episodic Consolidation — group related interactions into narrative episodes.
-  3a.  Cross-episode Insights — LLM-driven pattern/contradiction detection.
-  3b.  Gap Detection — identify knowledge gaps from metacognition table.
-  3c.  Creative Synthesis — connect gaps and episodes for novel insights.
-  3d.  Campaign Reflection — review campaign myokines for marketing insights.
-  3e.  Active Gap Resolution — research and resolve top priority gaps.
-  3.6  Prediction Reconciliation — Sophia closed-loop hot-lead / must-act / forecasts.
-  4.   Procedural Learning — turn repeatable successful patterns into procedures.
-  5.   Memory Pruning — archive or summarise older, less-relevant memories.
-  6.   Price Conflict Check — scan pricing data for inconsistencies.
-  7.   Conversation Quality Review — review retrieval quality via co-access matrix.
-  8.   Graph Consolidation — tune knowledge graph relationships.
-  9.   Follow-up Automation — detect stale quotes for follow-up.
-  10.  Morning Summary — log dream cycle results.
-  11.  Agent Journaling — first-person nightly reflections for each agent with actions today.
-
+Full cycle orchestration: ``dream_mode_cycle.execute_dream_cycle`` (journal → sleep
+→ stages 0–12 → operator reflection). Canonical logged stage keys and order:
+``dream_stage_index.DREAM_STAGE_EXECUTION_ORDER``.
 Each cycle is logged to ``data/dream_log.json`` for auditability.
 """
 
@@ -56,6 +37,7 @@ from brain_os.memory.dream_mode_constants import (
     JOURNAL_SYSTEM_PROMPT,
     PROCEDURAL_SYSTEM_PROMPT,
     PRUNE_SYSTEM_PROMPT,
+    normalize_stage_status,
 )
 from brain_os.memory.dream_mode_cycle import execute_dream_cycle
 from brain_os.memory.episodic import EpisodicMemory
@@ -69,6 +51,20 @@ from brain_os.schemas.llm_outputs import (
     DreamPrune,
 )
 from brain_os.services.llm_client import get_llm_client
+
+_DREAM_STAGE_ERRORS = (
+    DatabaseError,
+    BrainOSError,
+    LLMError,
+    sqlite3.Error,
+    OSError,
+    RuntimeError,
+    ValueError,
+    TypeError,
+    AttributeError,
+    KeyError,
+    ImportError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -171,15 +167,62 @@ class DreamMode:
             await self._db.execute(
                 "ALTER TABLE dream_reports ADD COLUMN stage_results TEXT NOT NULL DEFAULT '{}'"
             )
-        except Exception as exc:
+        except (sqlite3.Error, RuntimeError):
             pass
+        from brain_os.memory.episode_archive import ensure_episode_archive_table
+
+        await ensure_episode_archive_table(self._db)
         await self._db.commit()
 
     # ── public API ────────────────────────────────────────────────────────
 
-    async def run_dream_cycle(self, *, journal_last_24h: bool = False) -> DreamReport:
-        """Execute the full dream cycle (orchestration in ``dream_mode_cycle``)."""
-        return await execute_dream_cycle(self, journal_last_24h=journal_last_24h)
+    async def run_dream_cycle(
+        self,
+        *,
+        journal_last_24h: bool = False,
+        source: str = "background",
+    ) -> DreamReport:
+        """Execute the full dream cycle (orchestration in ``dream_mode_cycle``).
+
+        *source*: ``background`` (heartbeat/daemon — budget-gated) or
+        ``operator`` (``brain dream`` CLI / explicit MCP — budget pass-through).
+        """
+        from brain_os.config import get_settings
+        from brain_os.services.llm_caller_context import llm_caller_scope
+
+        src = (source or "background").strip().lower()
+        if src not in {"background", "operator"}:
+            src = "background"
+        with llm_caller_scope(
+            source=src,  # type: ignore[arg-type]
+            job="dream",
+            outcome_kind="dream_cycle",
+            call_site="dream_mode.run_dream_cycle",
+        ):
+            cfg = get_settings().app
+            if getattr(cfg, "dream_distributed_mutex_enabled", False):
+                import os
+                import uuid
+
+                from brain_os.systems.distributed_mutex import redis_mutex
+
+                owner = f"dream-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+                ttl = int(getattr(cfg, "dream_distributed_mutex_ttl_seconds", 7200) or 7200)
+                async with redis_mutex("dream_cycle", ttl_seconds=ttl, owner=owner) as acquired:
+                    if not acquired:
+                        logger.warning(
+                            "Dream cycle skipped — distributed mutex held by another process"
+                        )
+                        return DreamReport(
+                            cycle_date=date.today(),
+                            memories_consolidated=0,
+                            gaps_identified=[],
+                            creative_connections=[],
+                            campaign_insights=["skipped: dream_distributed_mutex not acquired"],
+                            stage_results={"distributed_mutex": "skipped"},
+                        )
+                    return await execute_dream_cycle(self, journal_last_24h=journal_last_24h)
+            return await execute_dream_cycle(self, journal_last_24h=journal_last_24h)
 
     def _load_checkpoint(self) -> dict[str, Any]:
         return load_dream_checkpoint(self._dream_checkpoint_path)
@@ -264,7 +307,7 @@ class DreamMode:
                         )
                         entries_saved += 1
                         logger.debug("Journal only: entry saved for %s", agent_name)
-                except (LLMError, Exception):
+                except (LLMError, Exception):  # noqa: BLE001 — LLM/SDK failure for one agent must not stop journaling
                     logger.warning("Journal only: LLM failed for %s", agent_name, exc_info=True)
 
             logger.info(
@@ -279,7 +322,7 @@ class DreamMode:
                 "agents": agents_processed,
                 "since_last_journal": since_last_journal,
             }
-        except Exception as exc:
+        except Exception:  # noqa: BLE001 — journal-only path returns partial results on any backend failure
             logger.exception("Journal only failed")
             return {
                 "entries_saved": entries_saved,
@@ -300,7 +343,7 @@ class DreamMode:
                     "healthy": healthy,
                 }
                 logger.info("Sleep phase: phantom limb re-check — %s healthy", len(healthy))
-            except Exception as exc:
+            except Exception:  # noqa: BLE001 — sleep phase step is isolated from the rest of the cycle
                 logger.exception("Sleep phase phantom limb re-check failed")
                 stage_log["stages"]["sleep_phantom_limb"] = {"status": "error"}
 
@@ -312,7 +355,7 @@ class DreamMode:
                 await self._power_level_tracker.nudge_trust_toward_default(step=0.05)
                 stage_log["stages"]["sleep_trust"] = {"status": "ok"}
                 logger.info("Sleep phase: trust reconciliation done")
-            except Exception as exc:
+            except Exception:  # noqa: BLE001 — sleep phase step is isolated from the rest of the cycle
                 logger.exception("Sleep phase trust reconciliation failed")
                 stage_log["stages"]["sleep_trust"] = {"status": "error"}
 
@@ -334,7 +377,7 @@ class DreamMode:
                     "Sleep phase: curiosity cycle timed out after %ds", _CURIOSITY_TIMEOUT_SEC
                 )
                 stage_log["stages"]["sleep_curiosity"] = {"status": "timeout"}
-            except Exception as exc:
+            except Exception:  # noqa: BLE001 — sleep phase step is isolated from the rest of the cycle
                 logger.exception("Sleep phase curiosity cycle failed")
                 stage_log["stages"]["sleep_curiosity"] = {"status": "error"}
 
@@ -380,9 +423,18 @@ class DreamMode:
                 "status": "ok",
                 "interactions_found": len(interactions),
             }
-        except (DatabaseError, Exception):
+        except (DatabaseError, Exception) as exc:  # noqa: BLE001 — dream stage isolation: one stage must not kill the cycle
             logger.exception("Dream Stage 1 (memory ingestion) failed")
-            stage_log["stages"]["1_memory_ingestion"] = {"status": "error"}
+            # Root cause of intermittent failures here: concurrent dream
+            # cycles contending on CRM list_interactions() (lock/connection
+            # pool contention), not a code bug in this stage. Previously the
+            # exception was swallowed with no detail in stage_log — persist
+            # it (matches stage 5's pattern) so it is diagnosable without
+            # re-running with debug logging.
+            stage_log["stages"]["1_memory_ingestion"] = {
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}"[:500],
+            }
 
         return interactions
 
@@ -397,11 +449,26 @@ class DreamMode:
         episodes: list[dict[str, Any]] = []
         memories_consolidated = 0
 
+        from brain_os.config import get_settings
+
+        _cfg = get_settings().app
+        min_history = int(getattr(_cfg, "dream_min_history_messages", 2))
+        lookback_hours = int(getattr(_cfg, "dream_lookback_hours", 24))
+
+        from brain_os.memory.episode_capture_metrics import record_capture, record_drop
+        from brain_os.memory.episode_hygiene import is_spam_episode_payload
+
         try:
             # Group interactions by contact_id to form per-contact episodes
             by_contact: dict[str, list[dict[str, Any]]] = {}
             for ix in interactions:
                 cid = ix.get("contact_id", "unknown")
+                cls = str(
+                    ix.get("email_class") or ix.get("classification") or ix.get("intent") or ""
+                ).lower()
+                if cls in {"spam", "newsletter", "marketing"}:
+                    record_drop("spam_email")
+                    continue
                 by_contact.setdefault(cid, []).append(ix)
 
             for contact_id, contact_interactions in by_contact.items():
@@ -412,16 +479,34 @@ class DreamMode:
                     direction = ix.get("direction", "OUTBOUND")
                     role = "assistant" if direction == "OUTBOUND" else "user"
                     content = ix.get("content") or ix.get("subject") or "(no content)"
-                    transcript.append({"role": role, "content": content})
+                    transcript.append(
+                        {
+                            "role": role,
+                            "content": content,
+                            "metadata": {
+                                "email_class": ix.get("email_class")
+                                or ix.get("classification")
+                                or ix.get("intent")
+                                or "",
+                            },
+                        }
+                    )
+                if is_spam_episode_payload(transcript, ""):
+                    record_drop("spam_email")
+                    continue
 
                 episode = await self._episodic.consolidate_episode(transcript, contact_id)
+                if episode.get("skipped"):
+                    record_drop(str(episode.get("skip_reason") or "skipped"))
+                    continue
                 episodes.append(episode)
                 memories_consolidated += 1
+                record_capture()
 
             # Also consolidate conversation-memory sessions (original behaviour)
             try:
                 if self._conversation._db is not None:
-                    cutoff = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
+                    cutoff = (datetime.now(UTC) - timedelta(hours=lookback_hours)).isoformat()
                     cursor = await self._conversation._db.execute(
                         "SELECT DISTINCT user_id, channel FROM conversations WHERE last_message_at >= ?",
                         (cutoff,),
@@ -430,12 +515,43 @@ class DreamMode:
                     await cursor.close()
                     for user_id, channel in rows:
                         history = await self._conversation.get_history(user_id, channel)
-                        if len(history) >= 2:
+                        if len(history) >= min_history:
                             ep = await self._episodic.consolidate_episode(history, user_id)
+                            if ep.get("skipped"):
+                                record_drop(str(ep.get("skip_reason") or "skipped"))
+                                continue
                             episodes.append(ep)
                             memories_consolidated += 1
-            except (LLMError, Exception):
+                            record_capture()
+                        else:
+                            record_drop("below_min_history")
+            except (LLMError, Exception):  # noqa: BLE001 — conversation/LLM consolidation failure is isolated
                 logger.exception("Stage 2: conversation-memory consolidation failed")
+
+            # Wonder findings (curiosity loop) write episodes directly with
+            # user_id='wonder'; pick up the last day's so the insight stages
+            # (3a cross-episode, 3c creative synthesis) have outside material.
+            try:
+                ep_db = getattr(self._episodic, "_db", None) or self._db
+                if ep_db is not None:
+                    cutoff = (datetime.now(UTC) - timedelta(hours=lookback_hours)).isoformat()
+                    cursor = await ep_db.execute(
+                        "SELECT narrative, created_at FROM episodes "
+                        "WHERE user_id = 'wonder' AND created_at >= ?",
+                        (cutoff,),
+                    )
+                    wonder_rows = await cursor.fetchall()
+                    await cursor.close()
+                    for narrative, created_at in wonder_rows:
+                        episodes.append(
+                            {
+                                "user_id": "wonder",
+                                "narrative": narrative,
+                                "created_at": created_at,
+                            }
+                        )
+            except (DatabaseError, sqlite3.Error, RuntimeError, ValueError, TypeError, IndexError):
+                logger.debug("Stage 2: wonder episode pickup failed", exc_info=True)
 
             logger.info(
                 "Stage 2: consolidated %d episodes from %d contact groups + conversations",
@@ -447,11 +563,44 @@ class DreamMode:
                 "episodes_created": len(episodes),
                 "memories_consolidated": memories_consolidated,
             }
-        except (BrainOSError, Exception):
+        except (BrainOSError, Exception):  # noqa: BLE001 — dream stage isolation: one stage must not kill the cycle
             logger.exception("Dream Stage 2 (episodic consolidation) failed")
             stage_log["stages"]["2_episodic_consolidation"] = {"status": "error"}
 
         return episodes, memories_consolidated
+
+    async def _stage2_1_episode_hygiene(self, stage_log: dict[str, Any]) -> None:
+        """Delete empty narratives + near-duplicate episode pairs (dream-time)."""
+        try:
+            from brain_os.memory.episode_hygiene import run_episode_hygiene
+
+            ep_db = getattr(self._episodic, "_db", None) or self._db
+            summary = await run_episode_hygiene(ep_db, dry_run=False)
+            stage_log["stages"]["2_1_episode_hygiene"] = summary
+        except (BrainOSError, Exception):  # noqa: BLE001 — dream stage isolation: one stage must not kill the cycle
+            logger.exception("Dream Stage 2.1 (episode hygiene) failed")
+            stage_log["stages"]["2_1_episode_hygiene"] = {"status": "error"}
+
+    async def _stage2_2_sleep_curation(self, stage_log: dict[str, Any]) -> None:
+        """Decay idle non-gold Mem0 rows + promote episode clusters → approval queue."""
+        if self._brain_hooks is None:
+            stage_log["stages"]["2_2_sleep_curation"] = {
+                "status": "skipped",
+                "reason": "no_brain_hooks",
+            }
+            return
+        await self._brain_hooks.stage2_2_sleep_curation(self._stage_context(), stage_log)
+
+    async def _stage2_5_mem0_replay(self, stage_log: dict[str, Any]) -> None:
+        """Sleep replay — reinforce frequently recalled Mem0 assemblies (hippocampus analogue)."""
+        try:
+            from brain_os.memory.dream_replay_queue import run_sleep_replay
+
+            summary = await run_sleep_replay(self._long_term)
+            stage_log["stages"]["2_5_mem0_replay"] = summary
+        except (BrainOSError, Exception):  # noqa: BLE001 — dream stage isolation: one stage must not kill the cycle
+            logger.exception("Dream Stage 2.5 (Mem0 replay) failed")
+            stage_log["stages"]["2_5_mem0_replay"] = {"status": "error"}
 
     # ── Stage 3: Insight Generation ───────────────────────────────────────
 
@@ -465,6 +614,12 @@ class DreamMode:
         gaps: list[dict[str, Any]] = []
         connections: list[dict[str, Any]] = []
         campaign_insights: list[str] = []
+
+        from brain_os.config import get_settings
+
+        _cfg = get_settings().app
+        lookback_hours = int(getattr(_cfg, "dream_lookback_hours", 24))
+        recent_limit = int(getattr(_cfg, "dream_creative_recent_episodes", 5))
 
         # 3a — Cross-episode insight analysis
         try:
@@ -488,7 +643,7 @@ class DreamMode:
                 "contradictions": len(insights.get("contradictions", [])),
                 "recommendations": len(insights.get("recommendations", [])),
             }
-        except (LLMError, Exception):
+        except (LLMError, Exception):  # noqa: BLE001 — dream stage isolation: one stage must not kill the cycle
             logger.exception("Dream Stage 3a (cross-episode insights) failed")
             stage_log.setdefault("stages", {})["3a_cross_episode_insights"] = {"status": "error"}
 
@@ -502,7 +657,7 @@ class DreamMode:
                         gaps TEXT NOT NULL, created_at TEXT NOT NULL
                     )"""
                 )
-                cutoff = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
+                cutoff = (datetime.now(UTC) - timedelta(hours=lookback_hours)).isoformat()
                 cursor = await self._db.execute(
                     "SELECT query, gaps FROM knowledge_gaps WHERE created_at >= ?",
                     (cutoff,),
@@ -523,7 +678,7 @@ class DreamMode:
                 "status": "ok",
                 "gaps_found": len(gaps),
             }
-        except (DatabaseError, Exception):
+        except (DatabaseError, Exception):  # noqa: BLE001 — dream stage isolation: one stage must not kill the cycle
             logger.exception("Dream Stage 3b (gap detection) failed")
             stage_log["stages"]["3b_gap_detection"] = {"status": "error"}
 
@@ -535,12 +690,14 @@ class DreamMode:
             if ep_db is not None:
                 try:
                     cursor = await ep_db.execute(
-                        "SELECT narrative, created_at FROM episodes ORDER BY created_at DESC LIMIT 5"
+                        "SELECT narrative, created_at FROM episodes "
+                        "ORDER BY created_at DESC LIMIT ?",
+                        (recent_limit,),
                     )
                     ep_rows = await cursor.fetchall()
                     await cursor.close()
                     recent_episodes = [{"narrative": r[0], "created_at": r[1]} for r in ep_rows]
-                except Exception as exc:
+                except (sqlite3.Error, RuntimeError, ValueError, TypeError, IndexError):
                     logger.debug("Stage 3c: episodes table not available")
 
             context_parts = []
@@ -565,7 +722,7 @@ class DreamMode:
                 "status": "ok",
                 "connections_found": len(connections),
             }
-        except (LLMError, Exception):
+        except (LLMError, Exception):  # noqa: BLE001 — dream stage isolation: one stage must not kill the cycle
             logger.exception("Dream Stage 3c (creative synthesis) failed")
             stage_log["stages"]["3c_creative_synthesis"] = {"status": "error"}
 
@@ -586,7 +743,7 @@ class DreamMode:
                 "status": "ok",
                 "campaign_insights": len(campaign_insights),
             }
-        except (LLMError, Exception):
+        except (LLMError, Exception):  # noqa: BLE001 — dream stage isolation: one stage must not kill the cycle
             logger.exception("Dream Stage 3d (campaign reflection) failed")
             stage_log["stages"]["3d_campaign_reflection"] = {"status": "error"}
 
@@ -607,6 +764,91 @@ class DreamMode:
             }
             return
         await self._brain_hooks.stage3e_gap_resolution(self._stage_context(), stage_log, gaps)
+
+    # ── Stage 3f: Revenue reflection ──────────────────────────────────────
+
+    async def _stage3f_revenue_reflection(self, stage_log: dict[str, Any]) -> None:
+        """Distil the day's revenue funnel events into one insight episode."""
+        from brain_os.config import get_settings
+
+        cfg = get_settings().app
+        if not getattr(cfg, "dream_revenue_reflection_enabled", True):
+            stage_log["stages"]["3f_revenue_reflection"] = {
+                "status": "skipped",
+                "reason": "disabled",
+            }
+            return
+        try:
+            from brain_os.memory.revenue_reflection import run_revenue_reflection
+
+            ep_db = getattr(self._episodic, "_db", None) or self._db
+            result = await run_revenue_reflection(
+                ep_db,
+                revenue_dir=str(getattr(cfg, "dream_revenue_dir", "data/revenue_mode")),
+                lookback_hours=int(getattr(cfg, "dream_lookback_hours", 24)),
+            )
+            stage_log["stages"]["3f_revenue_reflection"] = result
+        except _DREAM_STAGE_ERRORS:
+            logger.exception("Dream Stage 3f (revenue reflection) failed")
+            stage_log["stages"]["3f_revenue_reflection"] = {"status": "error"}
+
+    async def _stage3g_forced_collisions(self, stage_log: dict[str, Any]) -> None:
+        """Weekly serendipity collision ritual when cadence allows."""
+        from brain_os.config import get_settings
+
+        cfg = get_settings().app
+        if not getattr(cfg, "serendipity_collisions_enabled", True):
+            stage_log["stages"]["3g_forced_collisions"] = {
+                "status": "skipped",
+                "reason": "disabled",
+            }
+            return
+        try:
+            from brain_os.services.serendipity.collisions import run_collision_ritual
+            from brain_os.services.serendipity.paths import is_paused
+
+            if is_paused():
+                stage_log["stages"]["3g_forced_collisions"] = {
+                    "status": "skipped",
+                    "reason": "paused",
+                }
+                return
+            summary = await run_collision_ritual(force=False, persist=True)
+            try:
+                from brain_os.services.serendipity.opportunity_manager import enqueue_collision_summary
+
+                enqueue_result = enqueue_collision_summary(summary)
+                summary = {**summary, "enqueue": enqueue_result}
+            except Exception:  # noqa: BLE001 — serendipity enqueue hook is best-effort
+                logger.debug("Dream collision enqueue hook failed", exc_info=True)
+            stage_log["stages"]["3g_forced_collisions"] = normalize_stage_status(summary)
+        except _DREAM_STAGE_ERRORS:
+            logger.exception("Dream Stage 3g (forced collisions) failed")
+            stage_log["stages"]["3g_forced_collisions"] = {"status": "error"}
+
+    async def _stage3h_aftermarket_reflection(self, stage_log: dict[str, Any]) -> None:
+        """Nightly installed-base trigger sweep (confirmed assets only)."""
+        from brain_os.config import get_settings
+
+        cfg = get_settings().app
+        if not getattr(cfg, "dream_aftermarket_triggers_enabled", True):
+            stage_log["stages"]["3h_aftermarket_reflection"] = {
+                "status": "skipped",
+                "reason": "disabled",
+            }
+            return
+        try:
+            from brain_os.data.crm import CRMDatabase
+            from brain_os.services.installed_base.aftermarket_reflection import (
+                run_aftermarket_reflection,
+            )
+
+            crm = CRMDatabase()
+            summary = await run_aftermarket_reflection(crm, dry_run=False)
+            stage_log["stages"]["3h_aftermarket_reflection"] = normalize_stage_status(summary)
+        except _DREAM_STAGE_ERRORS:
+            logger.exception("Dream Stage 3h (aftermarket triggers) failed")
+            stage_log["stages"]["3h_aftermarket_reflection"] = {"status": "error"}
 
     # ── Stage 3.6: Prediction reconciliation ─────────────────────────────
 
@@ -648,9 +890,69 @@ class DreamMode:
                 report.correct,
                 report.incorrect,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 — dream stage isolation: one stage must not kill the cycle
             logger.exception("Dream Stage 3.6 (prediction reconciliation) failed")
             stage_log["stages"]["3_6_prediction_reconciliation"] = {"status": "error"}
+
+    # ── Stage 3i: Cross-memory reconciliation ─────────────────────────────
+
+    async def _stage3i_memory_reconciliation(
+        self,
+        episodes: list[dict[str, Any]],
+        insights: dict[str, Any],
+        stage_log: dict[str, Any],
+    ) -> None:
+        """Detect contradictions across ledger / episodic / Mem0 / relationship stores."""
+        from brain_os.config import get_settings
+
+        cfg = get_settings().app
+        if not getattr(cfg, "dream_memory_reconciliation_enabled", True):
+            stage_log["stages"]["3i_memory_reconciliation"] = {
+                "status": "skipped",
+                "reason": "disabled",
+            }
+            return
+        try:
+            from brain_os.memory.memory_reconciliation import run_memory_reconciliation_cycle
+
+            enqueue_fn = None
+            hooks = self._brain_hooks
+            if hooks is not None and hasattr(hooks, "enqueue_memory_reconciliation_corrections"):
+
+                async def _enqueue(candidates: list[dict[str, Any]], *, max_enqueue: int) -> int:
+                    return await hooks.enqueue_memory_reconciliation_corrections(
+                        candidates, max_enqueue=max_enqueue
+                    )
+
+                enqueue_fn = _enqueue
+
+            report = await run_memory_reconciliation_cycle(
+                llm=self._llm,
+                long_term=self._long_term,
+                relationship_memory=getattr(self, "_relationship_memory", None),
+                episodes=episodes,
+                insights=insights,
+                skip_llm=False,
+                enqueue_fn=enqueue_fn,
+            )
+            stage_log["stages"]["3i_memory_reconciliation"] = {
+                "status": report.status,
+                "claims_sampled": report.claims_sampled,
+                "contradictions_found": report.contradictions_found,
+                "ledger_hits": report.ledger_hits,
+                "llm_contradictions": report.llm_contradictions,
+                "enqueued": report.enqueued,
+                "events_written": report.events_written,
+                "skipped_reason": report.skipped_reason,
+            }
+            logger.info(
+                "Stage 3i: memory reconciliation contradictions=%d enqueued=%d",
+                report.contradictions_found,
+                report.enqueued,
+            )
+        except Exception:  # noqa: BLE001 — dream stage isolation: one stage must not kill the cycle
+            logger.exception("Dream Stage 3i (memory reconciliation) failed")
+            stage_log["stages"]["3i_memory_reconciliation"] = {"status": "error"}
 
     # ── Stage 4: Procedural Learning ──────────────────────────────────────
 
@@ -719,7 +1021,7 @@ class DreamMode:
                 "status": "ok",
                 "procedures_created": procedures_created,
             }
-        except (BrainOSError, Exception):
+        except (BrainOSError, Exception):  # noqa: BLE001 — dream stage isolation: one stage must not kill the cycle
             logger.exception("Dream Stage 4 (procedural learning) failed")
             stage_log["stages"]["4_procedural_learning"] = {"status": "error"}
 
@@ -733,97 +1035,256 @@ class DreamMode:
             clear_catalog_cache()
             stage_log["stages"]["skills_index_refresh"] = {"status": "ok", "path": str(path)}
             logger.info("Dream: refreshed skills index at %s", path)
-        except Exception as exc:
+        except _DREAM_STAGE_ERRORS:
             logger.exception("Dream: skills index refresh failed")
             stage_log["stages"]["skills_index_refresh"] = {"status": "error"}
 
     # ── Stage 5: Memory Pruning ───────────────────────────────────────────
 
+    async def _stage5_procedural_and_instinct_prune(self) -> tuple[int, int]:
+        """Prune stale procedures + TTL-expired instincts. Returns (proc, instinct)."""
+        procedural_pruned = 0
+        instinct_expired_pruned = 0
+        if self._procedural is None:
+            return procedural_pruned, instinct_expired_pruned
+        try:
+            from brain_os.config import get_settings
+
+            app = get_settings().app
+            if app.dream_procedural_prune_enabled:
+                procedural_pruned = await self._procedural.prune_decay_audit_candidates(limit=20)
+                if procedural_pruned:
+                    logger.info("Stage 5: pruned %d stale procedures", procedural_pruned)
+            if app.instinct_ttl_prune_enabled:
+                instinct_expired_pruned = await self._procedural.prune_expired_instincts(
+                    ttl_days=app.instinct_ttl_days, limit=20
+                )
+                if instinct_expired_pruned:
+                    logger.info(
+                        "Stage 5: pruned %d TTL-expired instincts (>%dd idle)",
+                        instinct_expired_pruned,
+                        app.instinct_ttl_days,
+                    )
+        except _DREAM_STAGE_ERRORS:
+            logger.exception("Dream Stage 5 (procedural prune) failed")
+        return procedural_pruned, instinct_expired_pruned
+
     async def _stage5_memory_pruning(self, stage_log: dict[str, Any]) -> None:
-        """Archive or summarise older, less-relevant memories."""
+        """Summarise old episodes; archive via two-stage episode_archive (no bypass delete).
+
+        Mem0 live-store deletion is owned exclusively by stage 5b
+        (``run_mem0_forgetting`` → archive → 30-day hard-delete). Stage 5 only
+        touches episodic SQLite + procedural decay.
+        """
         archived = 0
         summarised = 0
+        hard_deleted = 0
+        skipped_protected = 0
+        skipped_already_archived = 0
+        llm_prune_status = "skipped"
+        procedural_pruned = 0
+        instinct_expired_pruned = 0
         try:
             if self._db is None:
                 stage_log["stages"]["5_memory_pruning"] = {"status": "skipped"}
                 return
 
+            from brain_os.config import get_settings
+            from brain_os.memory.episode_archive import (
+                already_archived_ids,
+                archive_episodes,
+                ensure_episode_archive_table,
+                episode_looks_protected,
+                hard_delete_aged_episodes,
+            )
+
+            await ensure_episode_archive_table(self._db)
+            app = get_settings().app
+            hard_after = int(getattr(app, "mem0_forget_hard_delete_after_days", 30))
+
+            # Stage-2 hard-delete of aged episode archive rows (same lag as Mem0).
+            try:
+                hard_deleted = await hard_delete_aged_episodes(
+                    self._db, min_age_days=hard_after, limit=200
+                )
+            except _DREAM_STAGE_ERRORS:
+                logger.exception("Dream Stage 5 (episode archive hard-delete) failed")
+
+            # Episodes table is owned by EpisodicMemory; create if a lean
+            # DreamMode bootstrap skipped it (otherwise stage 5 hard-errors).
+            await self._db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS episodes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL DEFAULT '',
+                    narrative TEXT NOT NULL DEFAULT '',
+                    key_topics TEXT NOT NULL DEFAULT '[]',
+                    decisions TEXT NOT NULL DEFAULT '[]',
+                    commitments TEXT NOT NULL DEFAULT '[]',
+                    emotional_tone TEXT NOT NULL DEFAULT '',
+                    relationship_impact TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL DEFAULT ''
+                )
+                """
+            )
+            await self._db.commit()
+
             cutoff = (datetime.now(UTC) - timedelta(days=30)).isoformat()
             cursor = await self._db.execute(
-                "SELECT id, narrative, key_topics, created_at FROM episodes WHERE created_at < ? ORDER BY created_at ASC LIMIT 50",
+                "SELECT id, narrative, key_topics, created_at FROM episodes "
+                "WHERE created_at < ? ORDER BY created_at ASC LIMIT 50",
                 (cutoff,),
             )
             old_episodes = await cursor.fetchall()
             await cursor.close()
 
-            if not old_episodes:
+            if old_episodes:
+                candidate_ids = [int(r[0]) for r in old_episodes]
+                already = await already_archived_ids(self._db, candidate_ids)
+                live_episodes = [r for r in old_episodes if int(r[0]) not in already]
+                skipped_already_archived = len(old_episodes) - len(live_episodes)
+
+                if live_episodes:
+                    episodes_text = json.dumps(
+                        [
+                            {
+                                "id": r[0],
+                                "narrative": r[1],
+                                "topics": r[2],
+                                "date": r[3],
+                            }
+                            for r in live_episodes
+                        ],
+                        indent=2,
+                    )
+                    try:
+                        from brain_os.memory.dream_triggers import aggregate_signals
+
+                        sig = aggregate_signals()
+                        if sig.get("pruning_aggressive"):
+                            episodes_text = (
+                                "**Operator signals:** elevated verification churn — prefer "
+                                "archiving episodes that encode stale commercial assertions "
+                                "or contradictory claims.\n\n" + episodes_text
+                            )
+                    except _DREAM_STAGE_ERRORS:
+                        logger.debug("Dream stage 5 signals skipped", exc_info=True)
+
+                    try:
+                        result = await self._llm.generate_structured(
+                            PRUNE_SYSTEM_PROMPT,
+                            episodes_text,
+                            DreamPrune,
+                            max_user_chars=DREAM_STRUCTURED_MAX_USER_CHARS,
+                            name="dream.prune",
+                        )
+                        decisions = result.model_dump()
+                        llm_prune_status = "ok"
+
+                        archive_ids = [
+                            int(i) for i in (decisions.get("archive") or []) if i is not None
+                        ]
+                        # Never archive correction-flavoured episodes (Mnemon-adjacent).
+                        protected_ids: set[int] = set()
+                        by_id = {int(r[0]): r for r in live_episodes}
+                        filtered_archive: list[int] = []
+                        for eid in archive_ids:
+                            row = by_id.get(eid)
+                            if row is not None and episode_looks_protected(
+                                str(row[1] or ""), row[2]
+                            ):
+                                protected_ids.add(eid)
+                                skipped_protected += 1
+                                continue
+                            filtered_archive.append(eid)
+
+                        if filtered_archive:
+                            archived = await archive_episodes(
+                                self._db,
+                                filtered_archive,
+                                reason="dream_stage5_llm_archive",
+                            )
+
+                        for group in decisions.get("summarise", []):
+                            ids = [int(i) for i in (group.get("ids") or []) if i is not None]
+                            summary = group.get("summary", "")
+                            ids = [i for i in ids if i not in protected_ids]
+                            if ids and summary:
+                                placeholders = ",".join("?" for _ in ids)
+                                await self._db.execute(
+                                    f"UPDATE episodes SET narrative = ? "
+                                    f"WHERE id IN ({placeholders})",
+                                    [summary, *ids],
+                                )
+                                summarised += len(ids)
+
+                        await self._db.commit()
+                        logger.info(
+                            "Stage 5: archived %d, summarised %d episodes "
+                            "(hard_deleted=%d protected_skip=%d)",
+                            archived,
+                            summarised,
+                            hard_deleted,
+                            skipped_protected,
+                        )
+                    except _DREAM_STAGE_ERRORS as exc:
+                        # LLM flake must not fail the whole 5-family; procedural
+                        # prune + archive hard-delete still run below.
+                        llm_prune_status = "error"
+                        logger.exception(
+                            "Dream Stage 5 LLM prune failed (continuing with procedural prune): %s",
+                            exc,
+                        )
+            else:
                 logger.debug("Stage 5: no old episodes to prune")
-                stage_log["stages"]["5_memory_pruning"] = {
-                    "status": "ok",
-                    "archived": 0,
-                    "summarised": 0,
-                }
-                return
 
-            episodes_text = json.dumps(
-                [
-                    {"id": r[0], "narrative": r[1], "topics": r[2], "date": r[3]}
-                    for r in old_episodes
-                ],
-                indent=2,
-            )
-            try:
-                from brain_os.memory.dream_triggers import aggregate_signals
+            (
+                procedural_pruned,
+                instinct_expired_pruned,
+            ) = await self._stage5_procedural_and_instinct_prune()
 
-                sig = aggregate_signals()
-                if sig.get("pruning_aggressive"):
-                    episodes_text = (
-                        "**Operator signals:** elevated verification churn — prefer archiving "
-                        "episodes that encode stale commercial assertions or contradictory claims.\n\n"
-                        + episodes_text
-                    )
-            except Exception as exc:
-                logger.debug("Dream stage 5 signals skipped", exc_info=True)
-
-            result = await self._llm.generate_structured(
-                PRUNE_SYSTEM_PROMPT,
-                episodes_text,
-                DreamPrune,
-                max_user_chars=DREAM_STRUCTURED_MAX_USER_CHARS,
-                name="dream.prune",
-            )
-            decisions = result.model_dump()
-
-            archive_ids = decisions.get("archive", [])
-            if archive_ids:
-                placeholders = ",".join("?" for _ in archive_ids)
-                await self._db.execute(
-                    f"DELETE FROM episodes WHERE id IN ({placeholders})",
-                    archive_ids,
-                )
-                archived = len(archive_ids)
-
-            for group in decisions.get("summarise", []):
-                ids = group.get("ids", [])
-                summary = group.get("summary", "")
-                if ids and summary:
-                    placeholders = ",".join("?" for _ in ids)
-                    await self._db.execute(
-                        f"UPDATE episodes SET narrative = ? WHERE id IN ({placeholders})",
-                        [summary, *ids],
-                    )
-                    summarised += len(ids)
-
-            await self._db.commit()
-            logger.info("Stage 5: archived %d, summarised %d episodes", archived, summarised)
             stage_log["stages"]["5_memory_pruning"] = {
                 "status": "ok",
                 "archived": archived,
                 "summarised": summarised,
+                "hard_deleted": hard_deleted,
+                "skipped_protected": skipped_protected,
+                "skipped_already_archived": skipped_already_archived,
+                "llm_prune": llm_prune_status,
+                "procedural_pruned": procedural_pruned,
+                "instinct_expired_pruned": instinct_expired_pruned,
+                "deletion_owner": "episode_archive_two_stage",
+                "mem0_deletion_owner": "5b_mem0_forgetting",
             }
-        except (DatabaseError, Exception):
+        except (DatabaseError, Exception) as exc:  # noqa: BLE001 — dream stage isolation: one stage must not kill the cycle
             logger.exception("Dream Stage 5 (memory pruning) failed")
-            stage_log["stages"]["5_memory_pruning"] = {"status": "error"}
+            stage_log["stages"]["5_memory_pruning"] = {
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}"[:500],
+            }
+
+    # ── Stage 5b: Mem0 forgetting ─────────────────────────────────────────
+
+    async def _stage5b_mem0_forgetting(self, stage_log: dict[str, Any]) -> None:
+        """Permanently delete stale Mem0 memories (dry-run unless enabled)."""
+        try:
+            from brain_os.memory.mem0_forgetting import run_mem0_forgetting
+
+            summary = await run_mem0_forgetting(self._long_term)
+            stage_log["stages"]["5b_mem0_forgetting"] = summary
+        except (DatabaseError, Exception):  # noqa: BLE001 — dream stage isolation: one stage must not kill the cycle
+            logger.exception("Dream Stage 5b (mem0 forgetting) failed")
+            stage_log["stages"]["5b_mem0_forgetting"] = {"status": "error"}
+
+    async def _stage5c_qdrant_vector_hygiene(self, stage_log: dict[str, Any]) -> None:
+        """Classify/tag/delete junk Qdrant vectors (dry-run unless enabled)."""
+        if self._brain_hooks is None:
+            stage_log["stages"]["5c_qdrant_vector_hygiene"] = {
+                "status": "skipped",
+                "reason": "no_brain_hooks",
+            }
+            return
+        await self._brain_hooks.stage5c_qdrant_vector_hygiene(self._stage_context(), stage_log)
 
     # ── persistence helpers ───────────────────────────────────────────────
 
@@ -891,7 +1352,7 @@ class DreamMode:
             st = stats.get("status", "ok")
             stage_log["stages"]["0_55_pending_memory"] = {"status": st, **stats}
             logger.info("Stage 0.55: pending memory queue — %s", stats)
-        except Exception as exc:
+        except Exception:  # noqa: BLE001 — dream stage isolation: one stage must not kill the cycle
             logger.exception("Dream Stage 0.55 (pending memory queue) failed")
             stage_log["stages"]["0_55_pending_memory"] = {"status": "error"}
 
@@ -926,11 +1387,39 @@ class DreamMode:
     # ── Stage 9: Follow-up Automation ──────────────────────────────────
 
     async def _stage9_follow_up_automation(self, stage_log: dict[str, Any]) -> None:
-        """Detect stale quotes and suggest follow-ups."""
+        """Expire past-validity quotes, advance quoted cadence, emit HEAT items."""
         try:
             if self._crm is None:
                 stage_log["stages"]["9_follow_up"] = {"status": "skipped", "reason": "no CRM"}
                 return
+
+            from brain_os.services.quote_lifecycle import (
+                collect_quote_expiry_heat_items,
+                expire_past_validity,
+                run_quoted_cadence_tick,
+            )
+
+            sf = self._crm.session_factory
+            expired = await expire_past_validity(sf)
+            # Advance FOLLOW_UP_* ladder; drafts via ``brain quote cadence-tick``.
+            cadence = await run_quoted_cadence_tick(sf, draft=False, advance_status=True, limit=40)
+            heat_items = await collect_quote_expiry_heat_items(sf, within_days=7, limit=25)
+
+            heat_path = Path("data/operations/quote_expiry_heat.json")
+            heat_path.parent.mkdir(parents=True, exist_ok=True)
+            heat_path.write_text(
+                json.dumps(
+                    {
+                        "generated_at": datetime.now(UTC).isoformat(),
+                        "items": heat_items,
+                        "expired": expired,
+                        "cadence_count": cadence.get("count"),
+                    },
+                    indent=2,
+                    default=str,
+                ),
+                encoding="utf-8",
+            )
 
             stale_deals = []
             deals = await self._crm.list_deals()
@@ -945,9 +1434,22 @@ class DreamMode:
                     except ValueError:
                         pass
 
-            stage_log["stages"]["9_follow_up"] = {"status": "ok", "stale_deals": len(stale_deals)}
-            logger.info("Stage 9: %d stale deals found for follow-up", len(stale_deals))
-        except (DatabaseError, Exception):
+            stage_log["stages"]["9_follow_up"] = {
+                "status": "ok",
+                "stale_deals": len(stale_deals),
+                "quotes_expired": expired.get("count", 0),
+                "cadence_actions": cadence.get("count", 0),
+                "heat_items": len(heat_items),
+                "heat_path": str(heat_path),
+            }
+            logger.info(
+                "Stage 9: expired=%s cadence=%s heat=%s stale_deals=%s",
+                expired.get("count"),
+                cadence.get("count"),
+                len(heat_items),
+                len(stale_deals),
+            )
+        except (DatabaseError, Exception):  # noqa: BLE001 — dream stage isolation: one stage must not kill the cycle
             logger.exception("Dream Stage 9 (follow-up) failed")
             stage_log["stages"]["9_follow_up"] = {"status": "error"}
 
@@ -990,16 +1492,21 @@ class DreamMode:
 
             logger.info("Stage 10: %s", "\n".join(lines))
             stage_log["stages"]["10_morning_summary"] = {"status": "ok"}
-        except (BrainOSError, Exception):
+        except (BrainOSError, Exception):  # noqa: BLE001 — dream stage isolation: one stage must not kill the cycle
             logger.exception("Dream Stage 10 (morning summary) failed")
             stage_log["stages"]["10_morning_summary"] = {"status": "error"}
 
     # ── Stage 12: Cursor Session Learning ────────────────────────────────
 
     async def _stage12_cursor_session_learning(self, stage_log: dict[str, Any]) -> None:
-        """Learn from recent Cursor chat sessions logged by Graphe."""
+        """Mine straggler sessions, then synthesize today's per-session digests."""
         try:
             from brain_os.agents.graphe import _DB_PATH as _SESSION_DB
+            from brain_os.memory.session_miner import (
+                drain_mine_queue,
+                mine_unmined,
+                synthesize_daily_mined_digest,
+            )
 
             if not _SESSION_DB.exists():
                 stage_log["stages"]["12_cursor_sessions"] = {
@@ -1008,54 +1515,53 @@ class DreamMode:
                 }
                 return
 
-            import aiosqlite
-
-            async with aiosqlite.connect(str(_SESSION_DB), timeout=30.0) as db:
-                await db.execute("PRAGMA busy_timeout=30000")
-                cursor = await db.execute(
-                    "SELECT query, agents_used, response_summary FROM cursor_sessions "
-                    "ORDER BY timestamp DESC LIMIT 50"
-                )
-                rows = await cursor.fetchall()
-
-            if not rows:
-                stage_log["stages"]["12_cursor_sessions"] = {"status": "ok", "sessions_learned": 0}
-                return
-
-            patterns: list[str] = []
-            for query, agents_json, summary in rows:
-                patterns.append(
-                    f"Q: {(query or '')[:100]} → Agents: {agents_json} → {(summary or '')[:100]}"
-                )
-
-            learning_prompt = (
-                "Analyze these recent Cursor chat sessions and extract 3-5 learnings "
-                "about query patterns, optimal agent routing, and common user needs:\n\n"
-                + "\n".join(patterns[:30])
+            queue_summary = await drain_mine_queue(
+                limit=40,
+                db_path=_SESSION_DB,
+                llm=self._llm,
+                enqueue_pending=True,
             )
-
-            try:
-                learnings = await self._llm.generate_text(
-                    "You extract learnings from Cursor session logs for Brain OS.",
-                    learning_prompt,
-                    name="dream.cursor_session_learning",
-                )
-                if self._long_term is not None and learnings:
-                    await self._long_term.store(
-                        learnings,
-                        user_id="global",
-                        metadata={"type": "cursor_session_learning", "source": "dream_stage_12"},
-                    )
-                stage_log["stages"]["12_cursor_sessions"] = {
-                    "status": "ok",
-                    "sessions_learned": len(rows),
-                }
-                logger.info("Stage 12: learned from %d cursor sessions", len(rows))
-            except Exception as exc:
-                logger.exception("Stage 12: LLM learning failed")
-                stage_log["stages"]["12_cursor_sessions"] = {"status": "error"}
-
-        except Exception as exc:
+            straggler_summary = await mine_unmined(
+                limit=40,
+                db_path=_SESSION_DB,
+                llm=self._llm,
+                enqueue_pending=True,
+                since_days=2.0,
+                source="dream_stage_12",
+            )
+            digest_summary = await synthesize_daily_mined_digest(
+                db_path=_SESSION_DB,
+                llm=self._llm,
+                store_long_term=self._long_term,
+            )
+            sessions_learned = int(straggler_summary.get("ok") or 0) + int(
+                queue_summary.get("ok") or 0
+            )
+            stage_log["stages"]["12_cursor_sessions"] = {
+                "status": "ok",
+                "sessions_learned": sessions_learned,
+                "queue": {
+                    "processed": queue_summary.get("processed"),
+                    "ok": queue_summary.get("ok"),
+                    "errors": queue_summary.get("errors"),
+                },
+                "stragglers": {
+                    "ok": straggler_summary.get("ok"),
+                    "skipped": straggler_summary.get("skipped"),
+                    "errors": straggler_summary.get("errors"),
+                },
+                "daily_digest": {
+                    "sessions_mined_today": digest_summary.get("sessions_mined_today"),
+                    "stored": digest_summary.get("stored"),
+                },
+            }
+            logger.info(
+                "Stage 12: mined queue=%s stragglers=%s digest_sessions=%s",
+                queue_summary.get("ok"),
+                straggler_summary.get("ok"),
+                digest_summary.get("sessions_mined_today"),
+            )
+        except Exception:  # noqa: BLE001 — dream stage isolation: one stage must not kill the cycle
             logger.exception("Dream Stage 12 (cursor session learning) failed")
             stage_log["stages"]["12_cursor_sessions"] = {"status": "error"}
 
@@ -1098,6 +1604,16 @@ class DreamMode:
             }
             return
         await self._brain_hooks.stage12f_skill_candidates(self._stage_context(), stage_log)
+
+    async def _stage12g_instinct_evolve(self, stage_log: dict[str, Any]) -> None:
+        """Cluster high-confidence instincts into skill candidates when enabled."""
+        if self._brain_hooks is None:
+            stage_log.setdefault("stages", {})["12g_instinct_evolve"] = {
+                "status": "skipped",
+                "reason": "no_brain_hooks",
+            }
+            return
+        await self._brain_hooks.stage12g_instinct_evolve(self._stage_context(), stage_log)
 
     async def _stage12b_curator_lite(self, stage_log: dict[str, Any]) -> None:
         """Hermes-style SKILL/prompt hygiene report (no LLM). Opt-in via BRAIN_DREAM_CURATOR."""
@@ -1166,7 +1682,7 @@ class DreamMode:
                         )
                         entries_saved += 1
                         logger.debug("Stage 11: journal entry saved for %s", agent_name)
-                except (LLMError, Exception):
+                except (LLMError, Exception):  # noqa: BLE001 — LLM/SDK failure for one agent must not stop journaling
                     logger.warning("Stage 11: LLM journal failed for %s", agent_name, exc_info=True)
 
             stage_log["stages"]["11_agent_journaling"] = {
@@ -1181,9 +1697,17 @@ class DreamMode:
                 len(agent_names),
                 "last_24h" if journal_last_24h else "today",
             )
-        except (BrainOSError, Exception):
+        except (BrainOSError, Exception):  # noqa: BLE001 — dream stage isolation: one stage must not kill the cycle
             logger.exception("Dream Stage 11 (agent journaling) failed")
             stage_log["stages"]["11_agent_journaling"] = {"status": "error"}
+
+    async def _stage11b_operator_reflection(
+        self, stage_log: dict[str, Any], report: DreamReport
+    ) -> dict[str, Any]:
+        """Five-field operator reflection after the dream cycle (observation → open question)."""
+        from brain_os.services.operator_nightly_reflection import run_operator_nightly_reflection
+
+        return await run_operator_nightly_reflection(stage_log, report)
 
     def _write_dream_log(self, stage_log: dict[str, Any], report: DreamReport) -> None:
         """Append the cycle results to dream_log.json."""
