@@ -71,7 +71,20 @@ async def ask_agent(agent_name: str, question: str, handoff_json: str = "") -> s
             if not brief.source_agent:
                 brief = brief.model_copy(update={"source_agent": "mcp"})
             composed = AgentHandoffBrief.compose_query(brief, question)
-        return await agent.handle(composed)
+        # Bound Mem0 / retrieval identity for concurrent MCP + API safety.
+        from brain_os.brain.retrieval_context import mem0_user_id_var, with_retrieval_context
+
+        ctx = {"channel": "mcp", "mem0_user_id": mem0_user_id_var.get() or "global"}
+
+        async def _run() -> str:
+            return await agent.handle(composed, ctx)
+
+        return await with_retrieval_context(
+            run_id=None,
+            profile=None,
+            fn=_run,
+            mem0_user_id=str(ctx["mem0_user_id"]),
+        )
     except Exception as exc:
         logger.exception("MCP ask_agent failed")
         return f"Error: {exc}"

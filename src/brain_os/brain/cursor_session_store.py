@@ -310,8 +310,10 @@ class DualWriteCursorSessionStoreBackend(CursorSessionStoreBackend):
         run_id: str | None,
         work_context: dict[str, Any] | None,
         learning_meta: dict[str, Any] | None,
+        *,
+        session_id: str | None = None,
     ) -> str:
-        sid = str(uuid.uuid4())
+        sid = session_id or str(uuid.uuid4())
         await self._sqlite.insert_session(
             query,
             agents_used,

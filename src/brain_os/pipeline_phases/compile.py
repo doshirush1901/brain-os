@@ -12,7 +12,7 @@ from collections.abc import Callable
 from typing import Any
 
 from brain_os.brain.run_record_assembler import RunRecordAssemblyContext, assemble_from_pipeline
-from brain_os.brain.run_record_store import RunRecordStore
+from brain_os.brain.run_record_store import RunRecordStore, build_run_record_store
 from brain_os.data.models import Contact
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ _RUN_RECORD_STORE: RunRecordStore | None = None
 def _get_run_record_store() -> RunRecordStore:
     global _RUN_RECORD_STORE
     if _RUN_RECORD_STORE is None:
-        _RUN_RECORD_STORE = RunRecordStore()
+        _RUN_RECORD_STORE = build_run_record_store()
     return _RUN_RECORD_STORE
 
 

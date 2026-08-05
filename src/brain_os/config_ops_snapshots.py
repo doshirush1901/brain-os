@@ -11,7 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from brain_os.config import get_settings
+from brain_os import config as _config
 
 
 def infer_http_health_status(services: dict[str, Any]) -> str:
@@ -77,7 +77,7 @@ def _public_redis_netloc(url: str) -> str:
 
 def get_pipeline_runtime_public_snapshot() -> dict[str, str | int | float | bool]:
     """Non-secret pipeline and guardrail knobs for health endpoints and ops (matches active `.env`)."""
-    a = get_settings().app
+    a = _config.get_settings().app
     snap: dict[str, str | int | float | bool] = {
         "environment": a.environment,
         "log_level": a.log_level,
@@ -153,7 +153,7 @@ def get_pipeline_runtime_public_snapshot() -> dict[str, str | int | float | bool
 
 def get_email_ops_public_snapshot() -> dict[str, str | bool]:
     """Gmail / email workflow flags for health endpoints (no secrets, no token contents)."""
-    g = get_settings().google
+    g = _config.get_settings().google
     creds = g.credentials_path.expanduser()
     tok = g.token_path.expanduser()
     return {
@@ -168,7 +168,7 @@ def get_knowledge_store_public_snapshot() -> dict[str, str | bool]:
     """Active Qdrant collection target from settings (hybrid vs dense)."""
     from urllib.parse import urlparse
 
-    s = get_settings()
+    s = _config.get_settings()
     coll = s.qdrant.collection_hybrid if s.app.use_sparse_hybrid else s.qdrant.collection
     raw_url = s.qdrant.url.strip()
     parsed = urlparse(raw_url)
@@ -190,7 +190,7 @@ def get_graph_store_public_snapshot() -> dict[str, str]:
     """Neo4j Bolt target from settings (no password)."""
     from urllib.parse import urlparse
 
-    s = get_settings()
+    s = _config.get_settings()
     uri = s.neo4j.uri.strip()
     parsed = urlparse(uri)
     netloc = parsed.netloc
@@ -202,7 +202,7 @@ def get_graph_store_public_snapshot() -> dict[str, str]:
 
 def get_crm_database_public_snapshot() -> dict[str, str]:
     """Postgres host and DB name from ``DATABASE_URL`` (no credentials)."""
-    hostport, db = _public_postgres_host_db(get_settings().database.url)
+    hostport, db = _public_postgres_host_db(_config.get_settings().database.url)
     return {"postgres_netloc": hostport, "postgres_database": db}
 
 
@@ -212,7 +212,7 @@ def get_mem0_public_snapshot(immune_mem0: dict[str, Any] | None = None) -> dict[
     ``immune_mem0`` is the ``report["mem0"]`` dict when present (status, latency_ms, error).
     API key value is never exposed.
     """
-    key = get_settings().memory.api_key.get_secret_value().strip()
+    key = _config.get_settings().memory.api_key.get_secret_value().strip()
     out: dict[str, Any] = {"api_key_configured": bool(key)}
     if not immune_mem0:
         return out
@@ -230,7 +230,7 @@ def get_mem0_public_snapshot(immune_mem0: dict[str, Any] | None = None) -> dict[
 
 def get_redis_cache_public_snapshot() -> dict[str, str | bool]:
     """Redis URL presence and host:port (no password)."""
-    raw = get_settings().redis.url.strip()
+    raw = _config.get_settings().redis.url.strip()
     if not raw:
         return {"configured": False, "redis_netloc": ""}
     return {"configured": True, "redis_netloc": _public_redis_netloc(raw)}
@@ -238,7 +238,7 @@ def get_redis_cache_public_snapshot() -> dict[str, str | bool]:
 
 def get_llm_stack_public_snapshot() -> dict[str, str | bool]:
     """Configured LLM providers and model names (no API keys)."""
-    s = get_settings().llm
+    s = _config.get_settings().llm
     return {
         "openai_api_configured": bool(s.openai_api_key.get_secret_value().strip()),
         "anthropic_api_configured": bool(s.anthropic_api_key.get_secret_value().strip()),
@@ -266,7 +266,7 @@ def get_tracing_public_snapshot() -> dict[str, str | bool]:
     """Observability / tracing clients from settings (no secrets)."""
     from urllib.parse import urlparse
 
-    s = get_settings()
+    s = _config.get_settings()
     lf = s.langfuse
     lf_ok = bool(str(lf.public_key).strip() and lf.secret_key.get_secret_value().strip())
     parsed = urlparse(str(lf.base_url).strip())
@@ -283,7 +283,7 @@ def get_tracing_public_snapshot() -> dict[str, str | bool]:
 
 def get_vendor_apis_public_snapshot() -> dict[str, bool | str]:
     """Optional third-party APIs and Document AI (flags and non-secret fields only)."""
-    s = get_settings()
+    s = _config.get_settings()
     sch = s.search
     doc = s.document_ai
     tavily_ok = bool(sch.tavily_api_key.get_secret_value().strip())
@@ -296,6 +296,9 @@ def get_vendor_apis_public_snapshot() -> dict[str, bool | str]:
         "iris_web_search_configured": bool(tavily_ok or serper_ok or searchapi_ok),
         "searchapi_engine": (sch.searchapi_engine or "google").strip() or "google",
         "apollo_configured": bool(s.apollo.api_key.get_secret_value().strip()),
+        "people_data_labs_configured": bool(
+            s.people_data_labs.enabled and s.people_data_labs.api_key.get_secret_value().strip()
+        ),
         "jina_configured": bool(s.jina.api_key.get_secret_value().strip()),
         "firecrawl_configured": bool(s.firecrawl.api_key.get_secret_value().strip()),
         "unstructured_configured": bool(s.unstructured.api_key.get_secret_value().strip()),
@@ -304,7 +307,6 @@ def get_vendor_apis_public_snapshot() -> dict[str, bool | str]:
         "document_ai_location": str(doc.location or "").strip(),
         "newsdata_configured": bool(s.external_apis.api_key.get_secret_value().strip()),
         "google_maps_configured": bool(s.google.maps_api_key.get_secret_value().strip()),
-        "neverbounce_configured": bool(s.neverbounce.api_key.get_secret_value().strip()),
         "wolfram_configured": bool(
             s.wolfram.enabled and s.wolfram.app_id.get_secret_value().strip()
         ),
@@ -320,7 +322,7 @@ def _file_size_or_zero(path: Path) -> int:
 
 def get_http_api_public_snapshot() -> dict[str, str | bool]:
     """HTTP server–related settings for ops (no secret values)."""
-    a = get_settings().app
+    a = _config.get_settings().app
     cors = str(a.cors_origins or "").strip()
     preview = cors[:96] + ("…" if len(cors) > 96 else "")
     ical_key = bool(a.scheduling_ical_api_key.get_secret_value().strip())
@@ -347,7 +349,7 @@ def get_ingestion_brain_public_snapshot() -> dict[str, str | bool | int]:
     ilog = brain / "ingestion_log.json"
     iprog = brain / "imports_index_progress.json"
     graphe_db = brain / "cursor_sessions.db"
-    a = get_settings().app
+    a = _config.get_settings().app
     return {
         "data_dir_label": str(root),
         "brain_dir_exists": brain.is_dir(),
@@ -380,7 +382,7 @@ def get_runtime_build_public_snapshot() -> dict[str, str]:
 
 def get_secondary_mail_public_snapshot() -> dict[str, bool]:
     """Optional second Gmail OAuth paths (vendor/procurement mailbox); no secret values."""
-    g = get_settings().google
+    g = _config.get_settings().google
     cred = g.secondary_credentials_path
     tok = g.secondary_token_path
     if cred is None or tok is None:
@@ -403,7 +405,7 @@ def get_governance_brain_public_snapshot() -> dict[str, str | bool | int]:
     from brain_os.systems.data_dir_lock import get_data_dir
 
     root = get_data_dir() / "brain"
-    a = get_settings().app
+    a = _config.get_settings().app
     corr_db = root / "corrections.db"
     ledger = root / "correction_ledger.json"
     aj = root / "agent_journals.db"
@@ -425,7 +427,7 @@ def get_governance_brain_public_snapshot() -> dict[str, str | bool | int]:
 
 def get_storage_clients_public_snapshot() -> dict[str, float | int | bool]:
     """Qdrant/Neo4j client knobs from settings (no secret values)."""
-    s = get_settings()
+    s = _config.get_settings()
     q = s.qdrant
     return {
         "qdrant_timeout_s": float(q.timeout),
@@ -448,7 +450,7 @@ def get_workspace_content_public_snapshot() -> dict[str, str | bool]:
 
 def get_email_training_public_snapshot() -> dict[str, bool]:
     """TRAINING mailbox address from settings (presence only, not the address text)."""
-    g = get_settings().google
+    g = _config.get_settings().google
     return {"training_mailbox_configured": bool(g.training_email.strip())}
 
 
@@ -456,7 +458,7 @@ def get_pipeline_observability_public_snapshot() -> dict[str, str | float | bool
     """Logging, cache overrides, Sentry sampling, OAuth app id presence, Doc AI processor flags, Unstructured host."""
     from urllib.parse import urlparse
 
-    s = get_settings()
+    s = _config.get_settings()
     a = s.app
     g = s.google
     doc = s.document_ai
@@ -525,13 +527,13 @@ def get_sales_coaching_brain_public_snapshot() -> dict[str, str | bool | int]:
 
 def get_secondary_google_oauth_public_snapshot() -> dict[str, bool]:
     """Secondary Gmail OAuth *client id* configured (not secrets)."""
-    g = get_settings().google
+    g = _config.get_settings().google
     return {"secondary_oauth_client_id_configured": bool(str(g.secondary_oauth_client_id).strip())}
 
 
 def get_neo4j_connection_flags_public_snapshot() -> dict[str, bool]:
     """How Neo4j credentials are configured (no password or auth string values)."""
-    n = get_settings().neo4j
+    n = _config.get_settings().neo4j
     uri = n.uri.strip()
     cloud = n.cloud_uri.strip()
     cloud_cred = n.resolved_cloud_auth()
@@ -693,7 +695,7 @@ def get_repo_vcs_public_snapshot() -> dict[str, bool | str]:
 
 def get_app_feature_flags_public_snapshot() -> dict[str, bool]:
     """Boolean feature toggles from AppConfig (ingest/governance/cache; no secrets)."""
-    a = get_settings().app
+    a = _config.get_settings().app
     return {
         "mnemon_semantic_check": a.mnemon_semantic_check,
         "legacy_quarantine_strict": a.legacy_quarantine_strict,
@@ -739,7 +741,7 @@ def get_event_driven_ingestion_public_snapshot(
     """Event bus wiring and optional reactor / push / heartbeat flags (no secrets)."""
     from brain_os.service_keys import ServiceKey as SK
 
-    settings = get_settings()
+    settings = _config.get_settings()
     app = settings.app
     google = settings.google
     bus_present = False

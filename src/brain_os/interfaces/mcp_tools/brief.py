@@ -47,7 +47,7 @@ async def get_account_brief(
     email_processor = None
     if not skip_mail and srv._pantheon is not None:
         try:
-            from brain_os.interfaces.cli_runtime import _build_digestive, _build_email_processor
+            from brain_os.runtime.cli_runtime import _build_digestive, _build_email_processor
 
             digestive, _ing, _qd = _build_digestive()
             email_processor = _build_email_processor(

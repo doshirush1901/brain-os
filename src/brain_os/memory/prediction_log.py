@@ -170,32 +170,74 @@ class PredictionLog:
         pattern_id: str | None = None,
         max_age_days: int = 30,
     ) -> list[Prediction]:
-        """Predictions without ``was_correct`` within the age window."""
+        """Predictions without ``was_correct`` within the age window.
+
+        Pass ``max_age_days=0`` (or negative) to include all ages (backfill).
+        """
         assert self._db is not None
-        cutoff = (datetime.now(UTC) - timedelta(days=max_age_days)).isoformat()
-        if pattern_id:
-            cursor = await self._db.execute(
-                """
-                SELECT * FROM predictions
-                WHERE was_correct IS NULL
-                  AND timestamp >= ?
-                  AND pattern_id = ?
-                ORDER BY timestamp DESC
-                """,
-                (cutoff, pattern_id),
-            )
+        if max_age_days is not None and int(max_age_days) <= 0:
+            if pattern_id:
+                cursor = await self._db.execute(
+                    """
+                    SELECT * FROM predictions
+                    WHERE was_correct IS NULL
+                      AND pattern_id = ?
+                    ORDER BY timestamp DESC
+                    """,
+                    (pattern_id,),
+                )
+            else:
+                cursor = await self._db.execute(
+                    """
+                    SELECT * FROM predictions
+                    WHERE was_correct IS NULL
+                    ORDER BY timestamp DESC
+                    """,
+                )
         else:
-            cursor = await self._db.execute(
-                """
-                SELECT * FROM predictions
-                WHERE was_correct IS NULL AND timestamp >= ?
-                ORDER BY timestamp DESC
-                """,
-                (cutoff,),
-            )
+            cutoff = (datetime.now(UTC) - timedelta(days=max_age_days)).isoformat()
+            if pattern_id:
+                cursor = await self._db.execute(
+                    """
+                    SELECT * FROM predictions
+                    WHERE was_correct IS NULL
+                      AND timestamp >= ?
+                      AND pattern_id = ?
+                    ORDER BY timestamp DESC
+                    """,
+                    (cutoff, pattern_id),
+                )
+            else:
+                cursor = await self._db.execute(
+                    """
+                    SELECT * FROM predictions
+                    WHERE was_correct IS NULL AND timestamp >= ?
+                    ORDER BY timestamp DESC
+                    """,
+                    (cutoff,),
+                )
         rows = await cursor.fetchall()
         await cursor.close()
         return [self._row_to_prediction(r) for r in rows]
+
+    async def count_unreconciled(self, *, pattern_id: str | None = None) -> int:
+        """Count all unreconciled rows (no age window)."""
+        assert self._db is not None
+        if pattern_id:
+            cursor = await self._db.execute(
+                """
+                SELECT COUNT(*) FROM predictions
+                WHERE was_correct IS NULL AND pattern_id = ?
+                """,
+                (pattern_id,),
+            )
+        else:
+            cursor = await self._db.execute(
+                "SELECT COUNT(*) FROM predictions WHERE was_correct IS NULL"
+            )
+        row = await cursor.fetchone()
+        await cursor.close()
+        return int(row[0] or 0) if row else 0
 
     async def get_by_pattern(self, pattern_id: str, *, limit: int = 100) -> list[Prediction]:
         assert self._db is not None
@@ -211,6 +253,89 @@ class PredictionLog:
         rows = await cursor.fetchall()
         await cursor.close()
         return [self._row_to_prediction(r) for r in rows]
+
+    async def reconciled_count(self, *, pattern_id: str | None = None) -> int:
+        """Count predictions with a reconciled outcome (``was_correct`` set)."""
+        assert self._db is not None
+        if pattern_id:
+            cursor = await self._db.execute(
+                """
+                SELECT COUNT(*) FROM predictions
+                WHERE was_correct IS NOT NULL AND pattern_id = ?
+                """,
+                (pattern_id,),
+            )
+        else:
+            cursor = await self._db.execute(
+                "SELECT COUNT(*) FROM predictions WHERE was_correct IS NOT NULL"
+            )
+        row = await cursor.fetchone()
+        await cursor.close()
+        return int(row[0] or 0) if row else 0
+
+    async def accuracy_by_pattern_window(
+        self,
+        *,
+        days: int = 30,
+        min_predictions: int = 3,
+    ) -> dict[str, dict[str, Any]]:
+        """Rolling-window accuracy per pattern with optional prior-window trend."""
+        assert self._db is not None
+        now = datetime.now(UTC)
+        window_start = (now - timedelta(days=days)).isoformat()
+        prior_start = (now - timedelta(days=days * 2)).isoformat()
+        cursor = await self._db.execute(
+            """
+            SELECT pattern_id,
+                   COUNT(*) as total,
+                   SUM(CASE WHEN was_correct = 1 THEN 1 ELSE 0 END) as correct
+            FROM predictions
+            WHERE was_correct IS NOT NULL
+              AND timestamp >= ?
+            GROUP BY pattern_id
+            HAVING total >= ?
+            """,
+            (window_start, min_predictions),
+        )
+        rows = await cursor.fetchall()
+        await cursor.close()
+
+        result: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            pattern = str(row[0])
+            total = int(row[1] or 0)
+            correct = int(row[2] or 0)
+            accuracy = correct / total if total else 0.0
+
+            prior_cursor = await self._db.execute(
+                """
+                SELECT COUNT(*), SUM(CASE WHEN was_correct = 1 THEN 1 ELSE 0 END)
+                FROM predictions
+                WHERE was_correct IS NOT NULL
+                  AND pattern_id = ?
+                  AND timestamp >= ?
+                  AND timestamp < ?
+                """,
+                (pattern, prior_start, window_start),
+            )
+            prior_row = await prior_cursor.fetchone()
+            await prior_cursor.close()
+            prior_total = int(prior_row[0] or 0) if prior_row else 0
+            prior_correct = int(prior_row[1] or 0) if prior_row else 0
+            prior_accuracy = prior_correct / prior_total if prior_total else None
+            trend = None
+            if prior_accuracy is not None:
+                trend = round(accuracy - prior_accuracy, 4)
+
+            result[pattern] = {
+                "accuracy": round(accuracy, 4),
+                "correct": correct,
+                "sample_size": total,
+                "period": f"{days}d",
+                "prior_accuracy": round(prior_accuracy, 4) if prior_accuracy is not None else None,
+                "trend": trend,
+            }
+        return result
 
     async def accuracy_by_pattern(self, min_predictions: int = 3) -> dict[str, float]:
         assert self._db is not None

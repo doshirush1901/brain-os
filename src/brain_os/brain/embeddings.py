@@ -41,9 +41,22 @@ _INITIAL_BACKOFF_S = 0.5
 _BACKOFF_MULTIPLIER = 2
 _EMBED_REDIS_TTL = 7 * 86400  # 7 days
 
+#: Module write counter for opportunistic prune cadence.
+_sqlite_write_count = 0
+
 
 def _text_hash(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
+
+
+def _ensure_last_accessed_column(conn: sqlite3.Connection) -> None:
+    cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(embedding_cache)").fetchall()}
+    if "last_accessed" not in cols:
+        conn.execute("ALTER TABLE embedding_cache ADD COLUMN last_accessed TEXT")
+        conn.execute(
+            "UPDATE embedding_cache SET last_accessed = created_at "
+            "WHERE last_accessed IS NULL OR last_accessed = ''"
+        )
 
 
 def _init_sqlite_cache(path: str) -> None:
@@ -59,27 +72,36 @@ def _init_sqlite_cache(path: str) -> None:
             CREATE TABLE IF NOT EXISTS embedding_cache (
                 text_hash TEXT PRIMARY KEY,
                 embedding BLOB,
-                created_at TEXT
+                created_at TEXT,
+                last_accessed TEXT
             )
             """
         )
+        _ensure_last_accessed_column(conn)
         conn.commit()
     finally:
         conn.close()
 
 
 def _sqlite_get_sync(path: str, text_hash: str) -> list[float] | None:
-    """Synchronous SQLite cache lookup."""
+    """Synchronous SQLite cache lookup (touches ``last_accessed`` on hit)."""
     try:
         conn = sqlite3.connect(path, timeout=_SQLITE_TIMEOUT_S)
         try:
             conn.execute("PRAGMA busy_timeout=30000;")
+            _ensure_last_accessed_column(conn)
             row = conn.execute(
                 "SELECT embedding FROM embedding_cache WHERE text_hash = ?",
                 (text_hash,),
             ).fetchone()
             if row is None:
                 return None
+            now = datetime.now(UTC).isoformat()
+            conn.execute(
+                "UPDATE embedding_cache SET last_accessed = ? WHERE text_hash = ?",
+                (now, text_hash),
+            )
+            conn.commit()
             blob = row[0]
             return json.loads(blob.decode("utf-8") if isinstance(blob, bytes) else blob)
         finally:
@@ -89,26 +111,247 @@ def _sqlite_get_sync(path: str, text_hash: str) -> list[float] | None:
         return None
 
 
+def _sqlite_cache_file_bytes(path: str | Path) -> int:
+    p = Path(path)
+    try:
+        return int(p.stat().st_size) if p.is_file() else 0
+    except OSError:
+        return 0
+
+
+def _embedding_cache_limits() -> tuple[int, int, int, int]:
+    """Return (max_bytes, max_rows, retention_days, prune_every_n)."""
+    try:
+        app = get_settings().app
+        max_bytes = int(getattr(app, "embedding_sqlite_cache_max_bytes", 300 * 1024 * 1024))
+        max_rows = int(getattr(app, "embedding_sqlite_cache_max_rows", 100_000))
+        retention_days = int(getattr(app, "embedding_sqlite_cache_retention_days", 30))
+        every_n = int(getattr(app, "embedding_sqlite_cache_prune_every_n_writes", 1_000))
+        return max_bytes, max_rows, retention_days, every_n
+    except (AttributeError, TypeError, ValueError):
+        return 300 * 1024 * 1024, 100_000, 30, 1_000
+
+
+def prune_sqlite_cache(
+    path: str | Path,
+    *,
+    max_bytes: int | None = None,
+    max_rows: int | None = None,
+    retention_days: int | None = None,
+    vacuum: bool = True,
+) -> dict[str, Any]:
+    """LRU / retention / row-cap prune for the SQLite embedding cache.
+
+    Eviction order: oldest ``COALESCE(last_accessed, created_at)`` first.
+    When rows are deleted and ``vacuum`` is True, runs ``VACUUM`` so file size
+    shrinks on disk.
+    """
+    cache_path = Path(path)
+    cfg_max_bytes, cfg_max_rows, cfg_retention, _ = _embedding_cache_limits()
+    budget = int(max_bytes if max_bytes is not None else cfg_max_bytes)
+    row_cap = int(max_rows if max_rows is not None else cfg_max_rows)
+    retain_days = int(retention_days if retention_days is not None else cfg_retention)
+
+    before_bytes = _sqlite_cache_file_bytes(cache_path)
+    result: dict[str, Any] = {
+        "path": str(cache_path),
+        "bytes_before": before_bytes,
+        "bytes_after": before_bytes,
+        "rows_before": 0,
+        "rows_after": 0,
+        "deleted_retention": 0,
+        "deleted_row_cap": 0,
+        "deleted_byte_cap": 0,
+        "vacuumed": False,
+        "status": "missing",
+        "max_bytes": budget,
+        "max_rows": row_cap,
+    }
+    if not cache_path.is_file():
+        return result
+
+    _init_sqlite_cache(str(cache_path))
+    deleted_total = 0
+    try:
+        conn = sqlite3.connect(str(cache_path), timeout=_SQLITE_TIMEOUT_S)
+        try:
+            conn.execute("PRAGMA busy_timeout=30000;")
+            _ensure_last_accessed_column(conn)
+            rows_before = int(conn.execute("SELECT COUNT(*) FROM embedding_cache").fetchone()[0])
+            result["rows_before"] = rows_before
+
+            if retain_days > 0:
+                cutoff = datetime.now(UTC).timestamp() - (retain_days * 86400)
+                # ISO timestamps sort lexicographically for UTC Zulu; use string cutoff.
+                cutoff_iso = datetime.fromtimestamp(cutoff, tz=UTC).isoformat()
+                cur = conn.execute(
+                    """
+                    DELETE FROM embedding_cache
+                    WHERE COALESCE(last_accessed, created_at) < ?
+                    """,
+                    (cutoff_iso,),
+                )
+                result["deleted_retention"] = int(cur.rowcount or 0)
+                deleted_total += result["deleted_retention"]
+
+            row_count = int(conn.execute("SELECT COUNT(*) FROM embedding_cache").fetchone()[0])
+            if row_count > row_cap:
+                overflow = row_count - row_cap
+                cur = conn.execute(
+                    """
+                    DELETE FROM embedding_cache WHERE text_hash IN (
+                        SELECT text_hash FROM embedding_cache
+                        ORDER BY COALESCE(last_accessed, created_at) ASC
+                        LIMIT ?
+                    )
+                    """,
+                    (overflow,),
+                )
+                result["deleted_row_cap"] = int(cur.rowcount or 0)
+                deleted_total += result["deleted_row_cap"]
+
+            conn.commit()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        result["status"] = "error"
+        result["error"] = str(exc)[:200]
+        logger.warning("Embedding cache prune failed for %s: %s", cache_path, exc)
+        return result
+
+    # Byte-cap loop: delete batches of oldest rows until under budget (or empty).
+    # File size only shrinks after VACUUM, so estimate pressure via main file size
+    # between vacuum passes.
+    try:
+        while _sqlite_cache_file_bytes(cache_path) > budget:
+            conn = sqlite3.connect(str(cache_path), timeout=_SQLITE_TIMEOUT_S)
+            try:
+                conn.execute("PRAGMA busy_timeout=30000;")
+                remaining = int(conn.execute("SELECT COUNT(*) FROM embedding_cache").fetchone()[0])
+                if remaining <= 0:
+                    break
+                # Delete ~5% of rows per pass (min 1, max 500) then vacuum.
+                batch = max(1, min(500, remaining // 20 or 1))
+                cur = conn.execute(
+                    """
+                    DELETE FROM embedding_cache WHERE text_hash IN (
+                        SELECT text_hash FROM embedding_cache
+                        ORDER BY COALESCE(last_accessed, created_at) ASC
+                        LIMIT ?
+                    )
+                    """,
+                    (batch,),
+                )
+                n = int(cur.rowcount or 0)
+                result["deleted_byte_cap"] += n
+                deleted_total += n
+                conn.commit()
+            finally:
+                conn.close()
+            if vacuum:
+                _vacuum_sqlite(cache_path)
+                result["vacuumed"] = True
+            if n == 0:
+                break
+    except sqlite3.Error as exc:
+        result["status"] = "error"
+        result["error"] = str(exc)[:200]
+        logger.warning("Embedding cache byte-cap prune failed for %s: %s", cache_path, exc)
+        return result
+
+    if deleted_total > 0 and vacuum and not result["vacuumed"]:
+        _vacuum_sqlite(cache_path)
+        result["vacuumed"] = True
+
+    try:
+        conn = sqlite3.connect(str(cache_path), timeout=_SQLITE_TIMEOUT_S)
+        try:
+            result["rows_after"] = int(
+                conn.execute("SELECT COUNT(*) FROM embedding_cache").fetchone()[0]
+            )
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        pass
+
+    result["bytes_after"] = _sqlite_cache_file_bytes(cache_path)
+    if deleted_total == 0 and result["bytes_after"] <= budget:
+        result["status"] = "ok_under_budget"
+    elif result["bytes_after"] <= budget:
+        result["status"] = "ok_pruned"
+    else:
+        result["status"] = "ok_still_over_budget"
+    return result
+
+
+def _vacuum_sqlite(path: Path) -> None:
+    try:
+        conn = sqlite3.connect(str(path), timeout=_SQLITE_TIMEOUT_S)
+        try:
+            conn.execute("PRAGMA busy_timeout=30000;")
+            conn.execute("VACUUM;")
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        logger.warning("VACUUM failed for %s: %s", path, exc)
+
+
+def prune_embedding_cache_to_budget(
+    path: str | Path | None = None,
+    *,
+    max_bytes: int | None = None,
+) -> dict[str, Any]:
+    """Prune the default (or given) embedding cache to the configured byte budget."""
+    if path is None:
+        try:
+            from brain_os.systems.data_dir_lock import get_data_dir
+
+            cache_path: Path = get_data_dir() / "brain" / "embedding_cache.db"
+        except Exception:
+            cache_path = Path(_DEFAULT_CACHE_PATH)
+    else:
+        cache_path = Path(path)
+    return prune_sqlite_cache(cache_path, max_bytes=max_bytes)
+
+
+def _maybe_prune_after_write(path: str) -> None:
+    """Opportunistic prune every N sqlite writes."""
+    global _sqlite_write_count
+    _sqlite_write_count += 1
+    _, _, _, every_n = _embedding_cache_limits()
+    if every_n <= 0 or (_sqlite_write_count % every_n) != 0:
+        return
+    try:
+        prune_sqlite_cache(path)
+    except Exception:
+        logger.warning("Opportunistic embedding cache prune failed", exc_info=True)
+
+
 def _sqlite_put_sync(path: str, text_hash: str, embedding: list[float]) -> None:
     """Synchronous SQLite cache write."""
     try:
         conn = sqlite3.connect(path, timeout=_SQLITE_TIMEOUT_S)
         try:
             conn.execute("PRAGMA busy_timeout=30000;")
+            _ensure_last_accessed_column(conn)
+            now = datetime.now(UTC).isoformat()
             conn.execute(
                 """
-                INSERT OR REPLACE INTO embedding_cache (text_hash, embedding, created_at)
-                VALUES (?, ?, ?)
+                INSERT OR REPLACE INTO embedding_cache
+                    (text_hash, embedding, created_at, last_accessed)
+                VALUES (?, ?, ?, ?)
                 """,
                 (
                     text_hash,
                     json.dumps(embedding).encode("utf-8"),
-                    datetime.now(UTC).isoformat(),
+                    now,
+                    now,
                 ),
             )
             conn.commit()
         finally:
             conn.close()
+        _maybe_prune_after_write(path)
     except sqlite3.Error as e:
         logger.warning("SQLite cache write failed for %s: %s", text_hash[:16], e)
 
@@ -132,6 +375,10 @@ class EmbeddingService:
         self._redis_cache: Any = None
         if self._sqlite_cache_enabled():
             _init_sqlite_cache(cache_path)
+
+    @property
+    def model(self) -> str:
+        return self._model
 
     def _sqlite_cache_enabled(self) -> bool:
         """Return whether sqlite embedding cache should be used."""

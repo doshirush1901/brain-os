@@ -41,18 +41,30 @@ register_all_tools(mcp)
 def main() -> None:
     """Entry point for running the MCP server."""
     # Stdio MCP owns stdout for JSON-RPC; keep all diagnostics on stderr.
+    # Default WARNING: Cursor treats every stderr line as an MCP "error" and
+    # INFO chatter (tool_runner, Gmail, Qdrant) can flip the server to failed
+    # during live tool discovery even when tools still work.
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.WARNING,
         format="%(asctime)s  %(name)-28s  %(levelname)-8s  %(message)s",
         datefmt="%H:%M:%S",
         stream=sys.stderr,
         force=True,
     )
+    from brain_os.logging_setup import setup_ira_logging
+
+    # File logs only — stderr stays WARNING for Cursor MCP stability.
+    setup_ira_logging(console=False)
+    logging.getLogger("brain").info("Brain OS MCP logging attached to data/logs/")
     # Keep stderr concise in stdio mode; excessive stderr can destabilize some MCP clients.
     logging.getLogger("mcp.server.lowlevel.server").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("googleapiclient.discovery_cache").setLevel(logging.WARNING)
     logging.getLogger("brain_os.interfaces.cli").setLevel(logging.WARNING)
+    logging.getLogger("neo4j").setLevel(logging.ERROR)
+    logging.getLogger("alembic").setLevel(logging.WARNING)
+    # One-line boot breadcrumb only (still on stderr).
+    logging.getLogger("brain_os.interfaces.mcp_runtime").setLevel(logging.INFO)
     mcp.run()
 
 
@@ -71,6 +83,7 @@ import brain_os.interfaces.mcp_tools.agents as _mcp_agents_tools
 import brain_os.interfaces.mcp_tools.board as _mcp_board_tools
 import brain_os.interfaces.mcp_tools.brand as _mcp_brand_tools
 import brain_os.interfaces.mcp_tools.brief as _mcp_brief_tools
+import brain_os.interfaces.mcp_tools.code_graph as _mcp_code_graph_tools
 import brain_os.interfaces.mcp_tools.corrections as _mcp_corrections_tools
 import brain_os.interfaces.mcp_tools.creative as _mcp_creative_tools
 import brain_os.interfaces.mcp_tools.crm as _mcp_crm_tools
@@ -81,7 +94,9 @@ import brain_os.interfaces.mcp_tools.engineering as _mcp_engineering_tools
 import brain_os.interfaces.mcp_tools.financial_engineering as _mcp_financial_engineering_tools
 import brain_os.interfaces.mcp_tools.graph as _mcp_graph_tools
 import brain_os.interfaces.mcp_tools.ingest as _mcp_ingest_tools
+import brain_os.interfaces.mcp_tools.loops as _mcp_loops_tools
 import brain_os.interfaces.mcp_tools.math_mode as _mcp_math_mode_tools
+import brain_os.interfaces.mcp_tools.media as _mcp_media_tools
 import brain_os.interfaces.mcp_tools.memory as _mcp_memory_tools
 import brain_os.interfaces.mcp_tools.na_sales as _mcp_na_sales_tools
 import brain_os.interfaces.mcp_tools.projects as _mcp_projects_tools
@@ -143,6 +158,8 @@ get_stale_leads = _mcp_crm_tools.get_stale_leads
 list_deals = _mcp_crm_tools.list_deals
 update_deal = _mcp_crm_tools.update_deal
 enrich_contact_apollo = _mcp_crm_tools.enrich_contact_apollo
+enrich_contact_pdl = _mcp_crm_tools.enrich_contact_pdl
+verify_employment_pdl = _mcp_crm_tools.verify_employment_pdl
 get_pipeline_summary = _mcp_crm_tools.get_pipeline_summary
 search_crm = _mcp_crm_tools.search_crm
 search_people_apollo = _mcp_crm_tools.search_people_apollo
@@ -181,6 +198,7 @@ abort_task = _mcp_task_tools.abort_task
 list_tasks = _mcp_task_tools.list_tasks
 get_task_events = _mcp_task_tools.get_task_events
 retry_task = _mcp_task_tools.retry_task
+run_verification_loop = _mcp_loops_tools.run_verification_loop
 plan_task = _mcp_agent_loop_tools.plan_task
 execute_phase = _mcp_agent_loop_tools.execute_phase
 generate_report = _mcp_agent_loop_tools.generate_report
@@ -221,9 +239,15 @@ assemble_evidence_bundle = _mcp_engineering_tools.assemble_evidence_bundle
 convene_board_meeting = _mcp_board_tools.convene_board_meeting
 invoke_claude_code = _mcp_delegate_tools.invoke_claude_code
 git_ship_status = _mcp_delegate_tools.git_ship_status
+query_code_graph = _mcp_code_graph_tools.query_code_graph
 persuasion_sprint = _mcp_revenue_tools.persuasion_sprint
 get_account_brief = _mcp_brief_tools.get_account_brief
 prepare_formal_quote = _mcp_quotes_tools.prepare_formal_quote
+verify_demo_quote = _mcp_quotes_tools.verify_demo_quote
+render_demo_quote_pdf = _mcp_quotes_tools.render_demo_quote_pdf
+render_demo_quote_from_spec = _mcp_quotes_tools.render_demo_quote_from_spec
+check_demo_quote_gaps = _mcp_quotes_tools.check_demo_quote_gaps
+export_demo_quote_pdf = _mcp_quotes_tools.export_demo_quote_pdf
 query_brain = _mcp_query_tools.query_brain
 discover_tools_for_query = _mcp_query_tools.discover_tools_for_query
 search_knowledge = _mcp_query_tools.search_knowledge
@@ -234,11 +258,17 @@ optimize_payment_terms = _mcp_financial_engineering_tools.optimize_payment_terms
 evaluate_quote_npv_irr = _mcp_financial_engineering_tools.evaluate_quote_npv_irr
 scenario_engine = _mcp_financial_engineering_tools.scenario_engine
 customer_credit_risk_score = _mcp_financial_engineering_tools.customer_credit_risk_score
+margin_sensitivity = _mcp_financial_engineering_tools.margin_sensitivity
 get_system_status = _mcp_system_tools.get_system_status
 load_brand_design = _mcp_brand_tools.load_brand_design
 list_deck_briefs = _mcp_brand_tools.list_deck_briefs
 load_deck_brief = _mcp_brand_tools.load_deck_brief
 draft_deck_brief_from_company = _mcp_brand_tools.draft_deck_brief_from_company
+index_media_catalog = _mcp_media_tools.index_media_catalog
+search_media_assets = _mcp_media_tools.search_media_assets
+get_media_asset = _mcp_media_tools.get_media_asset
+place_media_in_html = _mcp_media_tools.place_media_in_html
+embed_media_catalog = _mcp_media_tools.embed_media_catalog
 creative_brief_distill = _mcp_creative_tools.creative_brief_distill
 concept_diverge = _mcp_creative_tools.concept_diverge
 evidence_creative_map = _mcp_creative_tools.evidence_creative_map

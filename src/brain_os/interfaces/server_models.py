@@ -42,8 +42,9 @@ class QueryAgentRequest(BaseModel):
 
 
 class BoardMeetingRequest(BaseModel):
-    topic: str
+    topic: str = ""
     participants: list[str] | None = None
+    send_email: bool = False
 
 
 class FeedbackRequest(BaseModel):
@@ -63,6 +64,21 @@ class FeedbackResponse(BaseModel):
     procedure_reinforced: bool = False
     praise_recorded: bool = False
     graphe_meta_patched: bool = False
+    mnemon_ledger_updated: bool = False
+    override_receipt: str | None = None
+
+
+class InboundInquiryRequest(BaseModel):
+    """Public contact-form submission (example-company.org widget)."""
+
+    name: str
+    email: str
+    company: str
+    message: str
+    phone: str | None = None
+    country: str | None = None
+    #: Honeypot — hidden field in the widget; any non-empty value marks a bot.
+    website: str = ""
 
 
 class EmailSearchRequest(BaseModel):
@@ -80,7 +96,7 @@ class EmailDraftRequest(BaseModel):
     to: str
     subject: str
     context: str
-    tone: str = "professional"
+    tone: str = "tim_urban"
     thread_id: str = ""
     intent: str = "meeting_request"
     date_options: list[str] = Field(default_factory=list)
@@ -119,6 +135,11 @@ class EmailSendRequest(BaseModel):
     #: When set, a successful Gmail send updates ``data/revenue_mode/`` pipeline to ``sent`` and outcome ``sent``.
     pipeline_company_name: str | None = None
     run_id: str | None = None
+    #: Outbound purpose the draft was finalized with (cold / soft_followup / quote / …).
+    #: Send-gate lint and judge use the same length dial as compose when set.
+    voice_purpose: str | None = None
+    #: Explicit length dial key (``intro_long``, ``quote_medium``, ``soft_short``, …).
+    voice_length_dial: str | None = None
 
 
 class EmailInterconnectionsRequest(BaseModel):
@@ -135,7 +156,7 @@ class EmailDraftFromBriefRequest(BaseModel):
     brief_id: str
     to: str
     subject_hint: str = ""
-    tone: str = "professional"
+    tone: str = "tim_urban"
 
 
 class SchedulingWindowRequest(BaseModel):
@@ -398,6 +419,7 @@ __all__ = [
     "EnrichProgrammeRequest",
     "FeedbackRequest",
     "FeedbackResponse",
+    "InboundInquiryRequest",
     "MemoryStoreRequest",
     "OutboundApproveRequest",
     "OutboundDraftBatchRequest",

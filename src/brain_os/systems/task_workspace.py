@@ -44,20 +44,35 @@ def resolve_task_workspace_dir(tasks_root: Path, task_id: str) -> Path:
     return target
 
 
-def init_workspace_files(workspace: Path, *, task_id: str, goal: str) -> None:
+def init_workspace_files(
+    workspace: Path,
+    *,
+    task_id: str,
+    goal: str,
+    long_lived: bool = False,
+) -> None:
     """Create README, MEMORIES, PLAN stub, and ``phases/`` for a new task."""
     workspace.mkdir(parents=True, exist_ok=True)
     (workspace / "phases").mkdir(parents=True, exist_ok=True)
 
+    long_lived_paths = ""
+    if long_lived:
+        long_lived_paths = (
+            "- `state.json` — disk checkpoint for resume after dormant\n"
+            "- `NEXT.md` — next action when paused (dormant)\n"
+            "- Resume: `brain tasks resume <task_id>`\n"
+        )
     readme = (
         f"# Task `{task_id}`\n\n"
         f"- **Status:** created\n"
-        f"- **Goal:** {goal.strip()}\n\n"
+        f"- **Goal:** {goal.strip()}\n"
+        f"- **Long-lived:** {'yes' if long_lived else 'no'}\n\n"
         "## Paths\n\n"
         "- `PLAN.md` — filled after Athena planning\n"
         "- `CONTRACT.json` — validation contract + per-phase verdicts\n"
         "- `MEMORIES.md` — append-only orchestrator log\n"
         "- `phases/` — raw output per phase\n"
+        f"{long_lived_paths}"
         "- Final report: `data/reports/<task_id>.md` (after completion)\n"
     )
     (workspace / "README.md").write_text(readme, encoding="utf-8")

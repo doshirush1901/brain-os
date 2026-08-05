@@ -39,9 +39,9 @@ SKILL_MATRIX: dict[str, str] = {
     ),
     "build_lead_report": ("Compile a lead-intelligence report with firmographic and intent data."),
     "data_pulling_from_email_past_conversations": (
-        "Pull past email conversations and PDF attachments for a contact: "
-        "run pull_contact_email_history and download_email_attachments, then "
-        "optionally analyze PDFs and update memory. Use before drafting lead emails."
+        "Pull past email conversations and PDF attachments for a contact via Gmail API "
+        "(history markdown, logic tree, PDF download, optional quote extraction and memory). "
+        "Use before drafting lead emails."
     ),
     "schedule_campaign": ("Set timing and delivery parameters for a marketing campaign."),
     # ── Writing & Communication ──────────────────────────────────────────

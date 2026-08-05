@@ -17,7 +17,7 @@ from typing import Any, ClassVar
 
 import httpx
 from neo4j import AsyncGraphDatabase
-from neo4j.exceptions import Neo4jError
+from neo4j.exceptions import Neo4jError, ServiceUnavailable
 
 from brain_os.brain.knowledge_graph_extraction import (
     EntityExtractionConfig,
@@ -26,6 +26,9 @@ from brain_os.brain.knowledge_graph_extraction import (
     extract_entities_from_text as _extract_entities_from_text,
 )
 from brain_os.brain.knowledge_graph_text import (
+    company_domain_from_host,
+    company_domain_label_key,
+    company_name_key,
     company_search_token,
     normalize_entity_name,
     normalize_source_id,
@@ -52,6 +55,16 @@ _GRAPH_STORE_ERRORS = (
 )
 
 
+def _bolt_direct_uri(uri: str) -> str | None:
+    """Map neo4j(+s):// routing URI → bolt(+s):// direct (Aura launchd fallback)."""
+    text = (uri or "").strip()
+    if text.startswith("neo4j+s://"):
+        return "bolt+s://" + text[len("neo4j+s://") :]
+    if text.startswith("neo4j://"):
+        return "bolt://" + text[len("neo4j://") :]
+    return None
+
+
 class KnowledgeGraph:
     """Async wrapper around the Neo4j graph database."""
 
@@ -63,12 +76,16 @@ class KnowledgeGraph:
         cfg = config or get_settings().neo4j
         app_cfg = get_settings().app
         neo4j_user, neo4j_password = cfg.resolved_auth()
+        self._auth = (neo4j_user, neo4j_password)
+        self._pool_size = app_cfg.neo4j_max_pool_size
+        self._uri = cfg.uri.strip()
         self._driver = AsyncGraphDatabase.driver(
-            cfg.uri,
-            auth=(neo4j_user, neo4j_password),
-            max_connection_pool_size=app_cfg.neo4j_max_pool_size,
+            self._uri,
+            auth=self._auth,
+            max_connection_pool_size=self._pool_size,
             connection_acquisition_timeout=60.0,
         )
+        self._bolt_fallback_tried = False
         self._cloud_driver: Any = None
         cloud_uri = cfg.cloud_uri.strip()
         cloud_auth = cfg.resolved_cloud_auth()
@@ -77,7 +94,7 @@ class KnowledgeGraph:
             self._cloud_driver = AsyncGraphDatabase.driver(
                 cloud_uri,
                 auth=(cu, cpw),
-                max_connection_pool_size=app_cfg.neo4j_max_pool_size,
+                max_connection_pool_size=self._pool_size,
                 connection_acquisition_timeout=60.0,
             )
             safe = cloud_uri.split("@")[-1] if "@" in cloud_uri else cloud_uri
@@ -89,12 +106,52 @@ class KnowledgeGraph:
             )
         self._llm = get_llm_client()
         self._entity_fallback_provider: str = app_cfg.digestive_llm_provider
+        self._digestive_openai_model: str = (app_cfg.digestive_openai_model or "").strip()
         self._digestive_anthropic_model: str = (app_cfg.digestive_anthropic_model or "").strip()
         self._event_bus = event_bus
+
+    @staticmethod
+    def _is_routing_unavailable(exc: BaseException) -> bool:
+        msg = str(exc).lower()
+        return "routing" in msg or "unable to retrieve" in msg
+
+    async def _switch_to_bolt_direct(self) -> bool:
+        """Fall back from neo4j+s routing to bolt+s direct (launchd/Aura).
+
+        launchd / minimal PATH contexts sometimes fail Neo4j Aura *routing*
+        discovery (``Unable to retrieve routing information``) while a direct
+        ``bolt+s://`` session still works — same hardening idea as
+        ``backup_nightly`` PATH/env fixes.
+        """
+        if self._bolt_fallback_tried:
+            return False
+        alt = _bolt_direct_uri(self._uri)
+        self._bolt_fallback_tried = True
+        if not alt or alt == self._uri:
+            return False
+        logger.warning(
+            "Neo4j routing failed for %s — retrying with direct Bolt URI %s",
+            self._uri.split("@")[-1][:80],
+            alt.split("@")[-1][:80],
+        )
+        old = self._driver
+        self._driver = AsyncGraphDatabase.driver(
+            alt,
+            auth=self._auth,
+            max_connection_pool_size=self._pool_size,
+            connection_acquisition_timeout=60.0,
+        )
+        self._uri = alt
+        try:
+            await old.close()
+        except Exception:
+            logger.debug("Neo4j old driver close after bolt fallback failed", exc_info=True)
+        return True
 
     def _entity_extraction_config(self) -> EntityExtractionConfig:
         return EntityExtractionConfig(
             entity_fallback_provider=self._entity_fallback_provider,
+            digestive_openai_model=self._digestive_openai_model,
             digestive_anthropic_model=self._digestive_anthropic_model,
         )
 
@@ -138,7 +195,7 @@ class KnowledgeGraph:
                 httpx.HTTPError,
                 ValueError,
                 TypeError,
-            ) as exc:
+            ):
                 if attempt == 0:
                     logger.warning(
                         "Neo4j cloud mirror execute_write failed, retrying once", exc_info=True
@@ -148,9 +205,32 @@ class KnowledgeGraph:
                         "Neo4j cloud mirror execute_write failed after retry", exc_info=True
                     )
 
+    async def ensure_connected(self) -> None:
+        """Ping Neo4j; on Aura routing failure switch to bolt+s direct."""
+        try:
+            async with self._driver.session() as session:
+                result = await session.run("RETURN 1 AS ok")
+                await result.consume()
+        except ServiceUnavailable as exc:
+            if not self._is_routing_unavailable(exc):
+                raise
+            if not await self._switch_to_bolt_direct():
+                raise
+            async with self._driver.session() as session:
+                result = await session.run("RETURN 1 AS ok")
+                await result.consume()
+
     async def _dual_execute_write(self, work: Any, *args: Any) -> None:
-        async with self._driver.session() as session:
-            await session.execute_write(work, *args)
+        try:
+            async with self._driver.session() as session:
+                await session.execute_write(work, *args)
+        except ServiceUnavailable as exc:
+            if not self._is_routing_unavailable(exc):
+                raise
+            if not await self._switch_to_bolt_direct():
+                raise
+            async with self._driver.session() as session:
+                await session.execute_write(work, *args)
         await self._mirror_execute_write(work, *args)
 
     async def _mirror_run(self, query: str, **params: Any) -> None:
@@ -168,15 +248,23 @@ class KnowledgeGraph:
                 httpx.HTTPError,
                 ValueError,
                 TypeError,
-            ) as exc:
+            ):
                 if attempt == 0:
                     logger.warning("Neo4j cloud mirror run failed, retrying once", exc_info=True)
                 else:
                     logger.warning("Neo4j cloud mirror run failed after retry", exc_info=True)
 
     async def _dual_run_write(self, query: str, **params: Any) -> None:
-        async with self._driver.session() as session:
-            await session.run(query, **params)
+        try:
+            async with self._driver.session() as session:
+                await session.run(query, **params)
+        except ServiceUnavailable as exc:
+            if not self._is_routing_unavailable(exc):
+                raise
+            if not await self._switch_to_bolt_direct():
+                raise
+            async with self._driver.session() as session:
+                await session.run(query, **params)
         await self._mirror_run(query, **params)
 
     def set_event_bus(self, event_bus: Any) -> None:
@@ -205,11 +293,25 @@ class KnowledgeGraph:
     async def ensure_indexes(self) -> None:
         """Create uniqueness constraints and indexes for core node types."""
         constraints = [
-            "CREATE CONSTRAINT IF NOT EXISTS FOR (c:Company) REQUIRE c.name IS UNIQUE",
+            # Company identity: unique on normalized name_key (NOT raw name — case
+            # variants like "FORMPACK"/"PartnerPack" must resolve to one node) and on
+            # the stable company_id slug.
+            "CREATE CONSTRAINT IF NOT EXISTS FOR (c:Company) REQUIRE c.name_key IS UNIQUE",
             "CREATE CONSTRAINT IF NOT EXISTS FOR (c:Company) REQUIRE c.company_id IS UNIQUE",
+            # Index (not unique) during stamp+dedup — uniqueness enforced after
+            # merge_company_dup_clusters collapses same-CRM duplicates.
+            "CREATE INDEX IF NOT EXISTS FOR (c:Company) ON (c.crm_company_id)",
             "CREATE CONSTRAINT IF NOT EXISTS FOR (p:Person) REQUIRE p.email IS UNIQUE",
+            "CREATE INDEX IF NOT EXISTS FOR (p:Person) ON (p.crm_contact_id)",
+            "CREATE INDEX IF NOT EXISTS FOR (c:Company) ON (c.domain)",
             "CREATE CONSTRAINT IF NOT EXISTS FOR (m:Machine) REQUIRE m.model IS UNIQUE",
             "CREATE CONSTRAINT IF NOT EXISTS FOR (q:Quote) REQUIRE q.quote_id IS UNIQUE",
+            "CREATE INDEX IF NOT EXISTS FOR (q:Quote) ON (q.quote_number)",
+            "CREATE CONSTRAINT IF NOT EXISTS FOR (w:WorkOrder) REQUIRE w.wo_number IS UNIQUE",
+            "CREATE CONSTRAINT IF NOT EXISTS FOR (a:MachineAsset) REQUIRE a.asset_id IS UNIQUE",
+            "CREATE CONSTRAINT IF NOT EXISTS FOR (d:Deal) REQUIRE d.deal_id IS UNIQUE",
+            "CREATE CONSTRAINT IF NOT EXISTS FOR (e:AccountEvent) REQUIRE e.event_id IS UNIQUE",
+            "CREATE INDEX IF NOT EXISTS FOR (e:AccountEvent) ON (e.at)",
             "CREATE CONSTRAINT IF NOT EXISTS FOR (ch:Chunk) REQUIRE ch.qdrant_point_id IS UNIQUE",
         ]
         async with self._driver.session() as session:
@@ -227,7 +329,7 @@ class KnowledgeGraph:
                         httpx.HTTPError,
                         ValueError,
                         TypeError,
-                    ) as exc:
+                    ):
                         logger.warning(
                             "Neo4j cloud constraint/index ensure failed: %s",
                             stmt[:80],
@@ -245,14 +347,29 @@ class KnowledgeGraph:
         website: str = "",
         company_id: str = "",
         source_id: str = "",
+        crm_company_id: str = "",
     ) -> None:
         name = normalize_entity_name(name)
-        company_id = (
-            company_id or ""
-        ).strip() or f"company::{re.sub(r'[^a-z0-9]+', '_', name.lower()).strip('_')}"
+        crm_company_id = (crm_company_id or "").strip()
+        raw_cid = (company_id or "").strip()
+        # Prefer slug company_id; if caller passed a CRM UUID as company_id,
+        # treat it as crm_company_id and keep a stable slug for the graph key.
+        from brain_os.brain.graph_identity import looks_like_uuid
+
+        if looks_like_uuid(raw_cid) and not crm_company_id:
+            crm_company_id = raw_cid
+            raw_cid = ""
+        company_id = raw_cid or f"company::{re.sub(r'[^a-z0-9]+', '_', name.lower()).strip('_')}"
         source_id = normalize_source_id(source_id)
         await self._dual_execute_write(
-            self._merge_company, name, region, industry, website, company_id, source_id
+            self._merge_company,
+            name,
+            region,
+            industry,
+            website,
+            company_id,
+            source_id,
+            crm_company_id,
         )
         await self._emit(
             "company",
@@ -260,6 +377,7 @@ class KnowledgeGraph:
             {
                 "name": name,
                 "company_id": company_id,
+                "crm_company_id": crm_company_id,
                 "region": region,
                 "industry": industry,
                 "website": website,
@@ -276,35 +394,221 @@ class KnowledgeGraph:
         website: str,
         company_id: str,
         source_id: str,
+        crm_company_id: str = "",
     ) -> None:
-        """Upsert by stable ``company_id`` (not display name).
+        """Upsert by CRM spine id when present, else stable ``company_id``.
 
         MERGE-on-name created a second node when LLM/Firecrawl used a variant
         label (e.g. "Kiefel GmbH" vs "Kiefel") while both slug to the same
         ``company_id``, violating the unique ``company_id`` constraint.
+
+        Legacy nodes created by the name_key write paths (no company_id yet)
+        are adopted first so the MERGE below matches them instead of creating
+        a duplicate.
         """
         now = datetime.now(UTC).isoformat()
+        name_key = company_name_key(name)
+        domain = company_domain_from_host(website)
+        domain_key = company_domain_label_key(domain)
+        crm_id = (crm_company_id or "").strip()
+
+        # Spine-first: adopt / merge onto existing crm_company_id holder.
+        if crm_id:
+            await tx.run(
+                """
+                MERGE (c:Company {crm_company_id: $crm_id})
+                ON CREATE SET
+                    c.name = $name,
+                    c.name_key = $name_key,
+                    c.company_id = $company_id,
+                    c.region = $region,
+                    c.industry = $industry,
+                    c.website = $website,
+                    c.domain = CASE WHEN $domain <> '' THEN $domain ELSE null END,
+                    c.first_seen_source = CASE WHEN $source_id = '' THEN null ELSE $source_id END,
+                    c.last_seen_source = CASE WHEN $source_id = '' THEN null ELSE $source_id END,
+                    c.resolution_confidence = 100.0,
+                    c.resolved_at = $now,
+                    c.resolution_method = 'writer',
+                    c.updated_at = $now
+                ON MATCH SET
+                    c.name = CASE WHEN c.name IS NULL OR c.name = '' THEN $name ELSE c.name END,
+                    c.name_key = COALESCE(c.name_key, $name_key),
+                    c.company_id = COALESCE(c.company_id, $company_id),
+                    c.region = CASE WHEN $region <> '' THEN $region ELSE c.region END,
+                    c.industry = CASE WHEN $industry <> '' THEN $industry ELSE c.industry END,
+                    c.website = CASE WHEN $website <> '' THEN $website ELSE c.website END,
+                    c.domain = CASE WHEN $domain <> '' THEN $domain ELSE c.domain END,
+                    c.last_seen_source = CASE WHEN $source_id = '' THEN c.last_seen_source ELSE $source_id END,
+                    c.first_seen_source = CASE
+                        WHEN $source_id = '' THEN c.first_seen_source
+                        ELSE COALESCE(c.first_seen_source, $source_id)
+                    END,
+                    c.updated_at = $now
+                """,
+                crm_id=crm_id,
+                name=name,
+                name_key=name_key,
+                company_id=company_id,
+                region=region,
+                industry=industry,
+                website=website,
+                domain=domain,
+                source_id=source_id,
+                now=now,
+            )
+            return
+
         await tx.run(
             """
-            OPTIONAL MATCH (legacy:Company {name: $name})
+            MATCH (legacy:Company)
             WHERE legacy.company_id IS NULL
+              AND (legacy.name = $name OR legacy.name_key = $name_key)
               AND NOT EXISTS { MATCH (:Company {company_id: $company_id}) }
-            SET legacy.company_id = $company_id
+            WITH legacy LIMIT 1
+            SET legacy.company_id = $company_id,
+                legacy.name_key = coalesce(legacy.name_key, $name_key)
+            """,
+            name=name,
+            name_key=name_key,
+            company_id=company_id,
+        )
+        await tx.run(
+            """
+            MATCH (holder:Company {name_key: $name_key})
+            WHERE holder.company_id IS NULL
+              AND NOT EXISTS { MATCH (:Company {company_id: $company_id}) }
+            SET holder.company_id = $company_id,
+                holder.updated_at = $now
+            """,
+            name_key=name_key,
+            company_id=company_id,
+            now=now,
+        )
+        if domain:
+            await tx.run(
+                """
+                MATCH (holder:Company)
+                WHERE holder.company_id IS NULL
+                  AND (
+                    holder.domain = $domain
+                    OR ($domain_key <> '' AND holder.name_key = $domain_key)
+                  )
+                  AND NOT EXISTS { MATCH (:Company {company_id: $company_id}) }
+                WITH holder LIMIT 1
+                SET holder.company_id = $company_id,
+                    holder.domain = CASE WHEN $domain <> '' THEN $domain ELSE holder.domain END,
+                    holder.name_key = coalesce(holder.name_key, $name_key),
+                    holder.updated_at = $now
+                """,
+                domain=domain,
+                domain_key=domain_key,
+                name_key=name_key,
+                company_id=company_id,
+                now=now,
+            )
 
+        existing_rec = None
+        existing_key = await tx.run(
+            """
+            MATCH (c:Company {name_key: $name_key})
+            RETURN c.company_id AS cid LIMIT 1
+            """,
+            name_key=name_key,
+        )
+        if existing_key is not None:
+            existing_rec = await existing_key.single()
+        if existing_rec is not None:
+            await tx.run(
+                """
+                MATCH (c:Company {name_key: $name_key})
+                SET
+                    c.company_id = coalesce(c.company_id, $company_id),
+                    c.name = CASE WHEN c.name IS NULL OR c.name = '' THEN $name ELSE c.name END,
+                    c.region = CASE WHEN $region <> '' THEN $region ELSE c.region END,
+                    c.industry = CASE WHEN $industry <> '' THEN $industry ELSE c.industry END,
+                    c.website = CASE WHEN $website <> '' THEN $website ELSE c.website END,
+                    c.domain = CASE WHEN $domain <> '' THEN $domain ELSE c.domain END,
+                    c.last_seen_source = CASE WHEN $source_id = '' THEN c.last_seen_source ELSE $source_id END,
+                    c.first_seen_source = CASE
+                        WHEN $source_id = '' THEN c.first_seen_source
+                        ELSE coalesce(c.first_seen_source, $source_id)
+                    END,
+                    c.updated_at = $now
+                """,
+                name=name,
+                name_key=name_key,
+                region=region,
+                industry=industry,
+                website=website,
+                domain=domain,
+                company_id=company_id,
+                source_id=source_id,
+                now=now,
+            )
+            return
+
+        if domain_key and domain_key != name_key:
+            domain_rec = None
+            existing_domain = await tx.run(
+                """
+                MATCH (c:Company {name_key: $domain_key})
+                RETURN c.name_key AS nk LIMIT 1
+                """,
+                domain_key=domain_key,
+            )
+            if existing_domain is not None:
+                domain_rec = await existing_domain.single()
+            if domain_rec is not None:
+                await tx.run(
+                    """
+                    MATCH (c:Company {name_key: $domain_key})
+                    SET
+                        c.company_id = coalesce(c.company_id, $company_id),
+                        c.name = CASE WHEN c.name IS NULL OR c.name = '' THEN $name ELSE c.name END,
+                        c.region = CASE WHEN $region <> '' THEN $region ELSE c.region END,
+                        c.industry = CASE WHEN $industry <> '' THEN $industry ELSE c.industry END,
+                        c.website = CASE WHEN $website <> '' THEN $website ELSE c.website END,
+                        c.domain = CASE WHEN $domain <> '' THEN $domain ELSE c.domain END,
+                        c.last_seen_source = CASE WHEN $source_id = '' THEN c.last_seen_source ELSE $source_id END,
+                        c.first_seen_source = CASE
+                            WHEN $source_id = '' THEN c.first_seen_source
+                            ELSE coalesce(c.first_seen_source, $source_id)
+                        END,
+                        c.updated_at = $now
+                    """,
+                    domain_key=domain_key,
+                    name=name,
+                    region=region,
+                    industry=industry,
+                    website=website,
+                    domain=domain,
+                    company_id=company_id,
+                    source_id=source_id,
+                    now=now,
+                )
+                return
+
+        await tx.run(
+            """
             MERGE (c:Company {company_id: $company_id})
             ON CREATE SET
                 c.name = $name,
+                c.name_key = $name_key,
                 c.region = $region,
                 c.industry = $industry,
                 c.website = $website,
+                c.domain = CASE WHEN $domain <> '' THEN $domain ELSE null END,
                 c.first_seen_source = CASE WHEN $source_id = '' THEN null ELSE $source_id END,
                 c.last_seen_source = CASE WHEN $source_id = '' THEN null ELSE $source_id END,
                 c.updated_at = $now
             ON MATCH SET
                 c.name = CASE WHEN c.name IS NULL OR c.name = '' THEN $name ELSE c.name END,
+                c.name_key = COALESCE(c.name_key, $name_key),
                 c.region = CASE WHEN $region <> '' THEN $region ELSE c.region END,
                 c.industry = CASE WHEN $industry <> '' THEN $industry ELSE c.industry END,
                 c.website = CASE WHEN $website <> '' THEN $website ELSE c.website END,
+                c.domain = CASE WHEN $domain <> '' THEN $domain ELSE c.domain END,
                 c.last_seen_source = CASE WHEN $source_id = '' THEN c.last_seen_source ELSE $source_id END,
                 c.first_seen_source = CASE
                     WHEN $source_id = '' THEN c.first_seen_source
@@ -313,9 +617,11 @@ class KnowledgeGraph:
                 c.updated_at = $now
             """,
             name=name,
+            name_key=name_key,
             region=region,
             industry=industry,
             website=website,
+            domain=domain,
             company_id=company_id,
             source_id=source_id,
             now=now,
@@ -417,9 +723,16 @@ class KnowledgeGraph:
         result = await tx.run(
             """
             MATCH (c:Company)
-            WHERE ($company_id <> '' AND c.company_id = $company_id)
-               OR ($name <> '' AND c.name = $name)
-               OR ($domain <> '' AND toLower(coalesce(c.website, '')) CONTAINS $domain)
+            WHERE ($company_id <> '' AND (
+                    c.company_id = $company_id OR c.crm_company_id = $company_id
+                  ))
+               OR ($name <> '' AND (c.name = $name OR c.name_key = $name_key))
+               OR ($domain <> '' AND (
+                    c.domain = $domain
+                    OR toLower(coalesce(c.website, '')) CONTAINS $domain
+                  ))
+               OR ($name <> '' AND any(v IN coalesce(c.name_variants, [])
+                    WHERE toLower(v) = toLower($name)))
             SET
               c.gauge_tier = CASE WHEN $gauge_tier <> '' THEN $gauge_tier ELSE c.gauge_tier END,
               c.gauge_confidence = CASE
@@ -439,6 +752,7 @@ class KnowledgeGraph:
             RETURN count(c) AS n
             """,
             name=name,
+            name_key=company_name_key(name),
             website=website,
             company_id=company_id,
             domain=domain,
@@ -476,11 +790,19 @@ class KnowledgeGraph:
         rows = await self._read(
             """
             MATCH (c:Company)
-            WHERE ($company_id <> '' AND c.company_id = $company_id)
-               OR ($name <> '' AND c.name = $name)
-               OR ($domain <> '' AND toLower(coalesce(c.website, '')) CONTAINS $domain)
+            WHERE ($company_id <> '' AND (
+                    c.company_id = $company_id OR c.crm_company_id = $company_id
+                  ))
+               OR ($name <> '' AND (c.name = $name OR c.name_key = $name_key))
+               OR ($domain <> '' AND (
+                    c.domain = $domain
+                    OR toLower(coalesce(c.website, '')) CONTAINS $domain
+                  ))
+               OR ($name <> '' AND any(v IN coalesce(c.name_variants, [])
+                    WHERE toLower(v) = toLower($name)))
             RETURN c.name AS name,
                    c.company_id AS company_id,
+                   c.crm_company_id AS crm_company_id,
                    c.website AS website,
                    c.gauge_tier AS gauge_tier,
                    c.gauge_confidence AS gauge_confidence,
@@ -490,6 +812,7 @@ class KnowledgeGraph:
             LIMIT 1
             """,
             name=name_norm,
+            name_key=company_name_key(name_norm),
             company_id=cid,
             domain=domain,
         )
@@ -507,11 +830,20 @@ class KnowledgeGraph:
         company_name: str = "",
         role: str = "",
         source_id: str = "",
+        crm_contact_id: str = "",
+        crm_company_id: str = "",
     ) -> None:
         company_name = normalize_entity_name(company_name) if company_name else ""
         source_id = normalize_source_id(source_id)
         await self._dual_execute_write(
-            self._merge_person, name, email, company_name, role, source_id
+            self._merge_person,
+            name,
+            email,
+            company_name,
+            role,
+            source_id,
+            (crm_contact_id or "").strip(),
+            (crm_company_id or "").strip(),
         )
         await self._emit(
             "person",
@@ -522,18 +854,31 @@ class KnowledgeGraph:
                 "company": company_name,
                 "role": role,
                 "source_id": source_id,
+                "crm_contact_id": (crm_contact_id or "").strip(),
+                "crm_company_id": (crm_company_id or "").strip(),
             },
         )
 
     @staticmethod
     async def _merge_person(
-        tx: Any, name: str, email: str, company_name: str, role: str, source_id: str
+        tx: Any,
+        name: str,
+        email: str,
+        company_name: str,
+        role: str,
+        source_id: str,
+        crm_contact_id: str = "",
+        crm_company_id: str = "",
     ) -> None:
         now = datetime.now(UTC).isoformat()
         await tx.run(
             """
             MERGE (p:Person {email: $email})
             SET p.name = $name, p.role = $role,
+                p.crm_contact_id = CASE
+                    WHEN $crm_contact_id <> '' THEN $crm_contact_id
+                    ELSE p.crm_contact_id
+                END,
                 p.last_seen_source = CASE WHEN $source_id = '' THEN p.last_seen_source ELSE $source_id END,
                 p.first_seen_source = CASE
                     WHEN $source_id = '' THEN p.first_seen_source
@@ -545,23 +890,51 @@ class KnowledgeGraph:
             email=email,
             role=role,
             source_id=source_id,
+            crm_contact_id=crm_contact_id,
             now=now,
         )
-        if company_name:
-            await tx.run(
-                """
-                MERGE (p:Person {email: $email})
-                MERGE (c:Company {name: $company})
-                MERGE (p)-[r:WORKS_AT]->(c)
-                SET r.role = $role,
-                    r.updated_at = $now,
-                    r.strength = COALESCE(r.strength, 1)
-                """,
-                email=email,
-                company=company_name,
-                role=role,
-                now=now,
-            )
+        if company_name or crm_company_id:
+            if crm_company_id:
+                await tx.run(
+                    """
+                    MERGE (p:Person {email: $email})
+                    MERGE (c:Company {crm_company_id: $crm_company_id})
+                    ON CREATE SET
+                        c.name = CASE WHEN $company <> '' THEN $company ELSE $crm_company_id END,
+                        c.name_key = $company_key,
+                        c.company_id = CASE
+                            WHEN $company_key <> '' THEN 'company::' + $company_key
+                            ELSE null
+                        END
+                    MERGE (p)-[r:WORKS_AT]->(c)
+                    SET r.role = $role,
+                        r.updated_at = $now,
+                        r.strength = COALESCE(r.strength, 1)
+                    """,
+                    email=email,
+                    company=company_name,
+                    company_key=company_name_key(company_name) if company_name else "",
+                    crm_company_id=crm_company_id,
+                    role=role,
+                    now=now,
+                )
+            else:
+                await tx.run(
+                    """
+                    MERGE (p:Person {email: $email})
+                    MERGE (c:Company {name_key: $company_key})
+                    ON CREATE SET c.name = $company
+                    MERGE (p)-[r:WORKS_AT]->(c)
+                    SET r.role = $role,
+                        r.updated_at = $now,
+                        r.strength = COALESCE(r.strength, 1)
+                    """,
+                    email=email,
+                    company=company_name,
+                    company_key=company_name_key(company_name),
+                    role=role,
+                    now=now,
+                )
 
     async def add_machine(
         self,
@@ -646,6 +1019,38 @@ class KnowledgeGraph:
             category=category,
         )
 
+    async def add_wonder_finding(
+        self,
+        *,
+        slug: str,
+        topic: str,
+        date: str,
+        summary: str = "",
+        urls: list[str] | None = None,
+        company: str | None = None,
+    ) -> None:
+        """Record a Wonder (curiosity loop) research finding; link to company if given."""
+        await self._dual_run_write(
+            "MERGE (w:WonderFinding {slug: $slug, date: $date}) "
+            "SET w.topic = $topic, w.summary = $summary, w.urls = $urls",
+            slug=slug,
+            date=date,
+            topic=topic,
+            summary=summary,
+            urls=urls or [],
+        )
+        if company:
+            await self._dual_run_write(
+                "MATCH (w:WonderFinding {slug: $slug, date: $date}) "
+                "MERGE (c:Company {name_key: $company_key}) "
+                "ON CREATE SET c.name = $company "
+                "MERGE (w)-[:ABOUT]->(c)",
+                slug=slug,
+                date=date,
+                company=normalize_entity_name(company),
+                company_key=company_name_key(company),
+            )
+
     async def add_exhibition(self, name: str, location: str = "", year: str = "") -> None:
         await self._dual_run_write(
             "MERGE (e:Exhibition {name: $name}) SET e.location = $location, e.year = $year",
@@ -663,11 +1068,26 @@ class KnowledgeGraph:
         date: str,
         status: str = "OPEN",
         source_id: str = "",
+        *,
+        currency: str = "",
+        crm_company_id: str = "",
     ) -> None:
+        """MERGE :Quote keyed by quote_id/quote_number with RECEIVED_QUOTE + QUOTES_MACHINE."""
+        from brain_os.brain.graph_erp_spine import upsert_quote_node
+
         company_name = normalize_entity_name(company_name)
         source_id = normalize_source_id(source_id)
-        await self._dual_execute_write(
-            self._merge_quote, quote_id, company_name, machine_model, value, date, status, source_id
+        await upsert_quote_node(
+            self,
+            quote_number=quote_id,
+            company_name=company_name,
+            machine_model=machine_model,
+            value=value,
+            currency=currency,
+            status=status,
+            sent_at=date or "",
+            crm_company_id=crm_company_id,
+            source_id=source_id,
         )
 
     @staticmethod
@@ -693,7 +1113,8 @@ class KnowledgeGraph:
                 END,
                 q.updated_at = $now
             WITH q
-            MERGE (c:Company {name: $company})
+            MERGE (c:Company {name_key: $company_key})
+            ON CREATE SET c.name = $company
             MERGE (q)-[qc:QUOTED_TO]->(c)
             SET qc.updated_at = $now, qc.strength = COALESCE(qc.strength, 1)
             WITH q
@@ -703,6 +1124,7 @@ class KnowledgeGraph:
             """,
             qid=quote_id,
             company=company_name,
+            company_key=company_name_key(company_name),
             machine=machine_model,
             value=value,
             date=date,
@@ -719,7 +1141,7 @@ class KnowledgeGraph:
     # interpolation — never add entries without reviewing the Cypher
     # injection implications.
     _KEY_FIELDS: ClassVar[dict[str, str]] = {
-        "Company": "name",
+        "Company": "name_key",
         "Person": "email",
         "Machine": "model",
         "Quote": "quote_id",
@@ -743,7 +1165,15 @@ class KnowledgeGraph:
             "CONTACTED_BY",
             "REFERRED_BY",
             "QUOTED_TO",
+            "RECEIVED_QUOTE",
             "QUOTES_MACHINE",
+            "ORDERED",
+            "BUILDS",
+            "OWNS_MACHINE",
+            "ASSET_OF",
+            "HAS_DEAL",
+            "DEAL_FOR_MACHINE",
+            "HAS_EVENT",
             "CO_RELEVANT",
             "DESCRIBES",
             "FROM_SOURCE",
@@ -802,7 +1232,8 @@ class KnowledgeGraph:
         try:
             await self._run_cypher_write(
                 """
-                MERGE (c:Company {name: $company})
+                MERGE (c:Company {name_key: $company_key})
+                ON CREATE SET c.name = $company
                 MERGE (r:OperatorContextRun {run_id: $run_id})
                 SET r += $props
                 MERGE (c)-[hr:HAS_CONTEXT_RUN]->(r)
@@ -810,6 +1241,7 @@ class KnowledgeGraph:
                 """,
                 params={
                     "company": company,
+                    "company_key": company_name_key(company),
                     "run_id": rid,
                     "props": props,
                     "ts": float(ts),
@@ -952,10 +1384,15 @@ class KnowledgeGraph:
         """
         if not from_key or not to_key:
             return False
+        from_name = to_name = ""
         if from_type == "Company":
-            from_key = normalize_entity_name(from_key)
+            from_name = normalize_entity_name(from_key)
+            from_key = company_name_key(from_name)
         if to_type == "Company":
-            to_key = normalize_entity_name(to_key)
+            to_name = normalize_entity_name(to_key)
+            to_key = company_name_key(to_name)
+        if not from_key or not to_key:
+            return False
         if rel_type not in self._ALLOWED_REL_TYPES:
             logger.warning("Ignoring unknown relationship type: %s", rel_type)
             return False
@@ -988,13 +1425,20 @@ class KnowledgeGraph:
                 )
         set_clause = "SET r += $props" if props else ""
 
+        # Company nodes are merged on name_key; preserve the display name on create.
+        from_create = " ON CREATE SET a.name = $from_name" if from_type == "Company" else ""
+        to_create = " ON CREATE SET b.name = $to_name" if to_type == "Company" else ""
         query = (
-            f"MERGE (a:{from_type} {{{from_field}: $from_key}}) "
-            f"MERGE (b:{to_type} {{{to_field}: $to_key}}) "
+            f"MERGE (a:{from_type} {{{from_field}: $from_key}}){from_create} "
+            f"MERGE (b:{to_type} {{{to_field}: $to_key}}){to_create} "
             f"MERGE (a)-[r:{rel_type}]->(b) "
             f"{set_clause}"
         )
         params: dict[str, Any] = {"from_key": from_key, "to_key": to_key, "props": props}
+        if from_type == "Company":
+            params["from_name"] = from_name
+        if to_type == "Company":
+            params["to_name"] = to_name
 
         try:
             async with self._driver.session() as session:
@@ -1062,6 +1506,148 @@ class KnowledgeGraph:
                 logger.debug("DESCRIBES merge failed for %s:%s", label, key, exc_info=True)
         return created
 
+    async def add_chunks_and_describes_batch(
+        self,
+        items: list[dict[str, Any]],
+    ) -> tuple[int, int]:
+        """Batch MERGE :Chunk nodes and DESCRIBES edges (same contract as single-point API).
+
+        Each item: ``point_id``, ``source``, ``source_category``, ``content_preview``,
+        ``entity_refs`` (list of (label, key)), optional ``source_id``.
+        Returns ``(chunks_linked, describes_edges)``.
+        """
+        if not items:
+            return 0, 0
+
+        chunk_rows: list[dict[str, Any]] = []
+        company_rows: list[dict[str, Any]] = []
+        person_rows: list[dict[str, Any]] = []
+        machine_rows: list[dict[str, Any]] = []
+        quote_rows: list[dict[str, Any]] = []
+
+        for item in items:
+            point_id = str(item.get("point_id") or "").strip()
+            if not point_id:
+                continue
+            preview = str(item.get("content_preview") or "")[:500]
+            source_id = normalize_source_id(str(item.get("source_id") or ""))
+            chunk_rows.append(
+                {
+                    "point_id": point_id,
+                    "source": str(item.get("source") or ""),
+                    "source_category": str(item.get("source_category") or ""),
+                    "preview": preview,
+                    "source_id": source_id,
+                }
+            )
+            for label, key in item.get("entity_refs") or []:
+                if not key or label not in self._KEY_FIELDS:
+                    continue
+                if label == "Company":
+                    display = normalize_entity_name(str(key))
+                    name_key = company_name_key(display)
+                    if not name_key:
+                        continue
+                    company_rows.append(
+                        {"point_id": point_id, "key": name_key, "display_name": display}
+                    )
+                elif label == "Person":
+                    person_rows.append({"point_id": point_id, "key": str(key)})
+                elif label == "Machine":
+                    machine_rows.append({"point_id": point_id, "key": str(key)})
+                elif label == "Quote":
+                    quote_rows.append({"point_id": point_id, "key": str(key)})
+
+        if not chunk_rows:
+            return 0, 0
+
+        try:
+            await self._dual_execute_write(self._merge_chunks_batch_tx, chunk_rows)
+            describes = 0
+            if company_rows:
+                await self._dual_execute_write(self._merge_describes_company_batch_tx, company_rows)
+                describes += len(company_rows)
+            if person_rows:
+                await self._dual_execute_write(self._merge_describes_person_batch_tx, person_rows)
+                describes += len(person_rows)
+            if machine_rows:
+                await self._dual_execute_write(self._merge_describes_machine_batch_tx, machine_rows)
+                describes += len(machine_rows)
+            if quote_rows:
+                await self._dual_execute_write(self._merge_describes_quote_batch_tx, quote_rows)
+                describes += len(quote_rows)
+        except _GRAPH_STORE_ERRORS:
+            logger.exception("Batch chunk link failed for %d rows", len(chunk_rows))
+            raise DatabaseError("Batch chunk link failed") from None
+
+        return len(chunk_rows), describes
+
+    @staticmethod
+    async def _merge_chunks_batch_tx(tx: Any, rows: list[dict[str, Any]]) -> None:
+        await tx.run(
+            """
+            UNWIND $rows AS row
+            MERGE (ch:Chunk {qdrant_point_id: row.point_id})
+            SET ch.source = row.source,
+                ch.source_category = row.source_category,
+                ch.content_preview = row.preview,
+                ch.source_id = CASE
+                    WHEN row.source_id = '' THEN ch.source_id
+                    ELSE row.source_id
+                END
+            """,
+            rows=rows,
+        )
+
+    @staticmethod
+    async def _merge_describes_company_batch_tx(tx: Any, rows: list[dict[str, Any]]) -> None:
+        await tx.run(
+            """
+            UNWIND $rows AS row
+            MATCH (ch:Chunk {qdrant_point_id: row.point_id})
+            MERGE (n:Company {name_key: row.key})
+            ON CREATE SET n.name = row.display_name
+            MERGE (ch)-[:DESCRIBES]->(n)
+            """,
+            rows=rows,
+        )
+
+    @staticmethod
+    async def _merge_describes_person_batch_tx(tx: Any, rows: list[dict[str, Any]]) -> None:
+        await tx.run(
+            """
+            UNWIND $rows AS row
+            MATCH (ch:Chunk {qdrant_point_id: row.point_id})
+            MERGE (n:Person {email: row.key})
+            MERGE (ch)-[:DESCRIBES]->(n)
+            """,
+            rows=rows,
+        )
+
+    @staticmethod
+    async def _merge_describes_machine_batch_tx(tx: Any, rows: list[dict[str, Any]]) -> None:
+        await tx.run(
+            """
+            UNWIND $rows AS row
+            MATCH (ch:Chunk {qdrant_point_id: row.point_id})
+            MERGE (n:Machine {model: row.key})
+            MERGE (ch)-[:DESCRIBES]->(n)
+            """,
+            rows=rows,
+        )
+
+    @staticmethod
+    async def _merge_describes_quote_batch_tx(tx: Any, rows: list[dict[str, Any]]) -> None:
+        await tx.run(
+            """
+            UNWIND $rows AS row
+            MATCH (ch:Chunk {qdrant_point_id: row.point_id})
+            MERGE (n:Quote {quote_id: row.key})
+            MERGE (ch)-[:DESCRIBES]->(n)
+            """,
+            rows=rows,
+        )
+
     @staticmethod
     async def _merge_chunk(
         tx: Any, point_id: str, source: str, source_category: str, preview: str, source_id: str
@@ -1085,18 +1671,105 @@ class KnowledgeGraph:
         field = KnowledgeGraph._KEY_FIELDS.get(label)
         if not field:
             return 0
+        on_create = ""
+        params: dict[str, Any] = {"point_id": point_id, "key": key}
+        if label == "Company":
+            display = normalize_entity_name(key)
+            params["key"] = company_name_key(display)
+            params["display_name"] = display
+            if not params["key"]:
+                return 0
+            on_create = "ON CREATE SET n.name = $display_name"
         result = await tx.run(
             f"""
             MATCH (ch:Chunk {{qdrant_point_id: $point_id}})
             MERGE (n:{label} {{{field}: $key}})
+            {on_create}
             MERGE (ch)-[:DESCRIBES]->(n)
             RETURN count(*) AS c
             """,
-            point_id=point_id,
-            key=key,
+            **params,
         )
         record = await result.single()
         return int(record["c"]) if record else 0
+
+    async def delete_chunks_by_point_ids(self, point_ids: list[str]) -> int:
+        """DETACH DELETE :Chunk nodes for the given Qdrant point IDs."""
+        if not point_ids:
+            return 0
+        result = await self._run_cypher_write(
+            "MATCH (ch:Chunk) WHERE ch.qdrant_point_id IN $pids "
+            "WITH collect(ch) AS chunks "
+            "FOREACH (c IN chunks | DETACH DELETE c) "
+            "RETURN size(chunks) AS n",
+            params={"pids": point_ids},
+        )
+        return int(result[0].get("n", 0)) if result else 0
+
+    async def mark_chunks_point_missing(self, point_ids: list[str]) -> int:
+        """Flag Chunk nodes whose Qdrant point no longer exists (keep DESCRIBES)."""
+        if not point_ids:
+            return 0
+        result = await self._run_cypher_write(
+            "MATCH (ch:Chunk) WHERE ch.qdrant_point_id IN $pids "
+            "SET ch.point_missing = true "
+            "RETURN count(ch) AS n",
+            params={"pids": point_ids},
+        )
+        return int(result[0].get("n", 0)) if result else 0
+
+    async def clear_chunks_point_missing(self, point_ids: list[str]) -> int:
+        """Clear ``point_missing`` on Chunks whose points resolve again."""
+        if not point_ids:
+            return 0
+        result = await self._run_cypher_write(
+            "MATCH (ch:Chunk) WHERE ch.qdrant_point_id IN $pids "
+            "SET ch.point_missing = false "
+            "RETURN count(ch) AS n",
+            params={"pids": point_ids},
+        )
+        return int(result[0].get("n", 0)) if result else 0
+
+    async def relink_chunk_point_ids(self, pairs: list[tuple[str, str]]) -> list[str]:
+        """Rewrite ``qdrant_point_id`` from old→new when the new PID is free.
+
+        Returns the list of *old* PIDs successfully rewritten. Unchanged orphans
+        should be passed to :meth:`mark_chunks_point_missing`. Writes one pair
+        at a time so unique-constraint races inside a batch cannot abort the rest.
+        """
+        if not pairs:
+            return []
+        out: list[str] = []
+        for old_raw, new_raw in pairs:
+            old_pid = (old_raw or "").strip()
+            new_pid = (new_raw or "").strip()
+            if not old_pid or not new_pid or old_pid == new_pid:
+                continue
+            try:
+                result = await self._run_cypher_write(
+                    """
+                    MATCH (ch:Chunk {qdrant_point_id: $old_pid})
+                    WHERE NOT EXISTS {
+                        MATCH (:Chunk {qdrant_point_id: $new_pid})
+                    }
+                    SET ch.qdrant_point_id = $new_pid,
+                        ch.point_missing = false,
+                        ch.relinked_from = $old_pid
+                    RETURN ch.relinked_from AS old_pid
+                    """,
+                    params={"old_pid": old_pid, "new_pid": new_pid},
+                )
+                for r in result or []:
+                    if isinstance(r, dict) and r.get("old_pid"):
+                        out.append(str(r["old_pid"]))
+            except _GRAPH_STORE_ERRORS:
+                logger.debug(
+                    "relink skipped (constraint or write error) %s → %s",
+                    old_pid,
+                    new_pid,
+                    exc_info=True,
+                )
+        return out
 
     async def get_chunk_point_ids_for_entity(
         self, entity_label: str, entity_key: str, limit: int = 20
@@ -1104,13 +1777,19 @@ class KnowledgeGraph:
         """Return Qdrant point IDs of Chunk nodes that DESCRIBE the given entity.
 
         Used by retrieval to fetch vector chunks for graph entities (denser stitch).
+        Skips chunks flagged ``point_missing`` (bridge reconcile).
         """
         if entity_label not in self._KEY_FIELDS or not entity_key:
             return []
         field = self._KEY_FIELDS[entity_label]
+        if entity_label == "Company":
+            entity_key = company_name_key(entity_key)
+            if not entity_key:
+                return []
         records = await self._read(
             f"""
             MATCH (ch:Chunk)-[:DESCRIBES]->(n:{entity_label} {{{field}: $key}})
+            WHERE coalesce(ch.point_missing, false) = false
             RETURN ch.qdrant_point_id AS point_id
             LIMIT {min(limit, 100)}
             """,
@@ -1131,12 +1810,14 @@ class KnowledgeGraph:
         await tx.run(
             """
             MERGE (p:Person {email: $email})
-            MERGE (c:Company {name: $company})
+            MERGE (c:Company {name_key: $company_key})
+            ON CREATE SET c.name = $company
             MERGE (p)-[r:WORKS_AT]->(c)
             SET r.role = $role
             """,
             email=email,
-            company=company,
+            company=normalize_entity_name(company),
+            company_key=company_name_key(company),
             role=role,
         )
 
@@ -1148,11 +1829,13 @@ class KnowledgeGraph:
         await tx.run(
             """
             MERGE (q:Quote {quote_id: $qid})
-            MERGE (c:Company {name: $company})
+            MERGE (c:Company {name_key: $company_key})
+            ON CREATE SET c.name = $company
             MERGE (q)-[:QUOTED_TO]->(c)
             """,
             qid=quote_id,
-            company=company,
+            company=normalize_entity_name(company),
+            company_key=company_name_key(company),
         )
 
     async def link_quote_to_machine(self, quote_id: str, machine_model: str) -> None:
@@ -1173,26 +1856,48 @@ class KnowledgeGraph:
     # ── queries ──────────────────────────────────────────────────────────
 
     async def find_company_contacts(self, company_name: str) -> list[dict[str, Any]]:
-        """Return all Person nodes linked to a company."""
+        """Return Person nodes linked to a company (spine front door)."""
+        hit = await self._resolve_graph_company(company_name)
+        if hit is None:
+            return []
         return await self._read(
             """
-            MATCH (p:Person)-[:WORKS_AT]->(c:Company {name: $name})
-            RETURN p.name AS name, p.email AS email, p.role AS role
+            MATCH (p:Person)-[:WORKS_AT]->(c:Company)
+            WHERE elementId(c) = $eid
+            RETURN p.name AS name, p.email AS email, p.role AS role,
+                   p.crm_contact_id AS crm_contact_id
             """,
-            name=company_name,
+            eid=hit.element_id,
         )
 
     async def find_company_quotes(self, company_name: str) -> list[dict[str, Any]]:
-        """Return all Quote nodes linked to a company."""
+        """Return Quote nodes linked to a company (spine front door)."""
+        hit = await self._resolve_graph_company(company_name)
+        if hit is None:
+            return []
         return await self._read(
             """
-            MATCH (q:Quote)-[:QUOTED_TO]->(c:Company {name: $name})
+            MATCH (c:Company) WHERE elementId(c) = $eid
+            OPTIONAL MATCH (c)-[:RECEIVED_QUOTE]->(q1:Quote)
+            OPTIONAL MATCH (q2:Quote)-[:QUOTED_TO]->(c)
+            WITH c, collect(DISTINCT q1) + collect(DISTINCT q2) AS qs
+            UNWIND [x IN qs WHERE x IS NOT NULL] AS q
             OPTIONAL MATCH (q)-[:QUOTES_MACHINE]->(m:Machine)
-            RETURN q.quote_id AS quote_id, q.value AS value, q.date AS date,
-                   q.status AS status, m.model AS machine
+            RETURN DISTINCT coalesce(q.quote_number, q.quote_id) AS quote_id,
+                   q.value AS value,
+                   coalesce(q.sent_at, q.date) AS date,
+                   q.status AS status,
+                   q.currency AS currency,
+                   coalesce(m.model, q.machine_model) AS machine
             """,
-            name=company_name,
+            eid=hit.element_id,
         )
+
+    async def _resolve_graph_company(self, name_or_domain_or_id: str) -> Any:
+        """Front door: crm_company_id → domain → name_key → name_variants → fuzzy."""
+        from brain_os.brain.graph_identity import resolve_graph_company
+
+        return await resolve_graph_company(self, name_or_domain_or_id)
 
     async def find_company_name_variants(
         self,
@@ -1205,24 +1910,39 @@ class KnowledgeGraph:
         if not name:
             return []
         lim = max(1, min(int(limit), 15))
+        hit = await self._resolve_graph_company(name)
+        names: list[str] = []
+        if hit is not None:
+            names.append(hit.name)
+            rows = await self._read(
+                """
+                MATCH (c:Company) WHERE elementId(c) = $eid
+                RETURN coalesce(c.name_variants, []) AS variants
+                """,
+                eid=hit.element_id,
+            )
+            if rows:
+                for v in rows[0].get("variants") or []:
+                    if v and str(v) not in names:
+                        names.append(str(v))
         token = company_search_token(name)
-        if len(token) < 4:
-            return [name] if await self.company_node_exists(name) else []
-        rows = await self._read(
-            """
-            MATCH (c:Company)
-            WHERE toLower(replace(c.name, ' ', '')) CONTAINS $token
-            RETURN DISTINCT c.name AS name
-            ORDER BY name
-            LIMIT $lim
-            """,
-            token=token,
-            lim=lim,
-        )
-        names = [str(r["name"]) for r in rows if r.get("name")]
-        if name not in names and await self.company_node_exists(name):
-            names.insert(0, name)
-        return names
+        if len(token) >= 4:
+            rows = await self._read(
+                """
+                MATCH (c:Company)
+                WHERE toLower(replace(c.name, ' ', '')) CONTAINS $token
+                RETURN DISTINCT c.name AS name
+                ORDER BY name
+                LIMIT $lim
+                """,
+                token=token,
+                lim=lim,
+            )
+            for r in rows:
+                n = str(r["name"]) if r.get("name") else ""
+                if n and n not in names:
+                    names.append(n)
+        return names[:lim]
 
     async def find_company_quote_documents(
         self,
@@ -1258,15 +1978,11 @@ class KnowledgeGraph:
         )
 
     async def company_node_exists(self, company_name: str) -> bool:
-        """True when a :Company node exists for the normalized name."""
-        name = normalize_entity_name((company_name or "").strip())
-        if not name:
+        """True when a :Company node resolves via the graph identity front door."""
+        if not (company_name or "").strip():
             return False
-        rows = await self._read(
-            "MATCH (c:Company {name: $name}) RETURN c.name AS name LIMIT 1",
-            name=name,
-        )
-        return bool(rows)
+        hit = await self._resolve_graph_company(company_name)
+        return hit is not None
 
     async def expand_company_one_hop(
         self,
@@ -1278,7 +1994,6 @@ class KnowledgeGraph:
         quote_limit: int = 5,
     ) -> dict[str, list[dict[str, Any]]]:
         """Structured 1-hop neighborhood for account brief / retrieval (P2)."""
-        name = normalize_entity_name((company_name or "").strip())
         empty: dict[str, list[dict[str, Any]]] = {
             "operator_runs": [],
             "pipeline_runs": [],
@@ -1287,8 +2002,13 @@ class KnowledgeGraph:
             "quote_documents": [],
             "related_companies": [],
         }
-        if not name:
+        raw = (company_name or "").strip()
+        if not raw:
             return empty
+        hit = await self._resolve_graph_company(raw)
+        if hit is None:
+            return empty
+        name = hit.name or normalize_entity_name(raw)
         ctx_lim = max(1, min(int(context_run_limit), 20))
         pipe_lim = max(1, min(int(pipeline_run_limit), 10))
         contact_lim = max(1, min(int(contact_limit), 20))
@@ -1298,19 +2018,21 @@ class KnowledgeGraph:
             operator_runs, pipeline_runs, contacts, quotes, quote_documents = await asyncio.gather(
                 self._read(
                     """
-                    MATCH (c:Company {name: $name})-[:HAS_CONTEXT_RUN]->(r:OperatorContextRun)
+                    MATCH (c:Company)-[:HAS_CONTEXT_RUN]->(r:OperatorContextRun)
+                    WHERE elementId(c) = $eid
                     RETURN r.run_id AS run_id, r.kind AS kind, r.outcome AS outcome,
                            r.summary AS summary, r.ts AS ts, r.success AS success,
                            r.crm_stage AS crm_stage, r.machine_model AS machine_model
                     ORDER BY r.ts DESC
                     LIMIT $lim
                     """,
-                    name=name,
+                    eid=hit.element_id,
                     lim=ctx_lim,
                 ),
                 self._read(
                     """
-                    MATCH (c:Company {name: $name})-[:HAS_PIPELINE_RUN]->(p:PipelineRun)
+                    MATCH (c:Company)-[:HAS_PIPELINE_RUN]->(p:PipelineRun)
+                    WHERE elementId(c) = $eid
                     OPTIONAL MATCH (p)-[:HAS_EVIDENCE]->(e:ReasoningEvidence)
                     WITH p, count(e) AS evidence_count
                     RETURN p.run_id AS run_id, p.outcome AS outcome, p.channel AS channel,
@@ -1319,28 +2041,30 @@ class KnowledgeGraph:
                     ORDER BY p.ts_end DESC
                     LIMIT $lim
                     """,
-                    name=name,
+                    eid=hit.element_id,
                     lim=pipe_lim,
                 ),
                 self._read(
                     """
-                    MATCH (p:Person)-[:WORKS_AT]->(c:Company {name: $name})
+                    MATCH (p:Person)-[:WORKS_AT]->(c:Company)
+                    WHERE elementId(c) = $eid
                     RETURN p.name AS name, p.email AS email, p.role AS role
                     LIMIT $lim
                     """,
-                    name=name,
+                    eid=hit.element_id,
                     lim=contact_lim,
                 ),
                 self._read(
                     """
                     MATCH (q:Quote)-[:QUOTED_TO]->(c:Company)
-                    WHERE c.name IN $names
+                    WHERE elementId(c) = $eid OR c.name IN $names
                     OPTIONAL MATCH (q)-[:QUOTES_MACHINE]->(m:Machine)
                     RETURN q.quote_id AS quote_id, q.value AS value, q.date AS date,
                            q.status AS status, m.model AS machine, c.name AS company
                     ORDER BY q.date DESC
                     LIMIT $lim
                     """,
+                    eid=hit.element_id,
                     names=variants or [name],
                     lim=quote_lim,
                 ),
@@ -1359,6 +2083,8 @@ class KnowledgeGraph:
             "quotes": quotes,
             "quote_documents": quote_documents,
             "related_companies": variants,
+            "resolved_via": hit.method,
+            "crm_company_id": hit.crm_company_id,
         }
 
     async def set_company_embedding(
@@ -1384,10 +2110,11 @@ class KnowledgeGraph:
         try:
             await self._run_cypher_write(
                 """
-                MATCH (c:Company {name: $name})
+                MATCH (c:Company)
+                WHERE c.name_key = $key OR c.name = $name
                 SET c += $props
                 """,
-                params={"name": name, "props": props},
+                params={"name": name, "key": company_name_key(name), "props": props},
             )
             return True
         except _GRAPH_STORE_ERRORS:
@@ -1401,11 +2128,13 @@ class KnowledgeGraph:
             return None
         rows = await self._read(
             """
-            MATCH (c:Company {name: $name})
+            MATCH (c:Company)
+            WHERE c.name_key = $key OR c.name = $name
             RETURN c.embedding AS embedding
             LIMIT 1
             """,
             name=name,
+            key=company_name_key(name),
         )
         if not rows:
             return None
@@ -1423,12 +2152,14 @@ class KnowledgeGraph:
             return None
         rows = await self._read(
             """
-            MATCH (c:Company {name: $name})
+            MATCH (c:Company)
+            WHERE c.name_key = $key OR c.name = $name
             RETURN c.embedding_text_hash AS embedding_text_hash,
                    c.embedding_updated_at AS embedding_updated_at
             LIMIT 1
             """,
             name=name,
+            key=company_name_key(name),
         )
         return rows[0] if rows else None
 
@@ -1498,58 +2229,108 @@ class KnowledgeGraph:
     ) -> dict[str, Any]:
         """Return a subgraph of nodes within *max_hops* of the named entity.
 
-        Anchors the walk on ``name``, ``email``, or ``model`` only. (Neo4j emits
-        ``UnknownPropertyKeyWarning`` if we OR on ``quote_id`` before any
-        ``Quote`` node has that property in the catalog; use
-        :meth:`find_company_quotes` for quote-id lookups.)
+        Company anchors use the shared spine front door
+        (``crm_company_id`` / domain / ``name_key`` / variants / fuzzy) so
+        ``KTX Japan``, ``ktx.co.jp``, and a CRM UUID resolve equally.
+        Person/machine still match on email/model.
 
         Tries APOC ``subgraphAll`` first for efficiency; falls back to a
         standard variable-length MATCH if APOC is not installed.
         """
+        empty: dict[str, Any] = {
+            "nodes": [],
+            "relationships": [],
+            "resolved_via": None,
+            "anchor": None,
+        }
+        raw = (entity_name or "").strip()
+        if not raw:
+            return empty
+
+        start_eid: str | None = None
+        resolved_via: str | None = None
+        anchor_name: str | None = None
+
+        company_hit = await self._resolve_graph_company(raw)
+        if company_hit is not None:
+            start_eid = company_hit.element_id
+            resolved_via = company_hit.method
+            anchor_name = company_hit.name
+        else:
+            person_rows = await self._read(
+                """
+                MATCH (start)
+                WHERE start.email = $name OR start.model = $name
+                   OR toLower(coalesce(start.email, '')) = toLower($name)
+                RETURN elementId(start) AS eid,
+                       coalesce(start.name, start.email, start.model) AS label
+                LIMIT 1
+                """,
+                name=raw,
+            )
+            if person_rows:
+                start_eid = str(person_rows[0]["eid"])
+                resolved_via = "email_or_model"
+                anchor_name = str(person_rows[0].get("label") or raw)
+
+        if not start_eid:
+            return empty
+
+        # Bound the walk — high-degree anchors (KTX ~3k edges) blow Aura sessions
+        # when APOC subgraphAll is unbounded.
+        node_limit = 80
         try:
             records = await self._read(
                 f"""
-                MATCH (start)
-                WHERE start.name = $name OR start.email = $name OR start.model = $name
-                CALL apoc.path.subgraphAll(start, {{maxLevel: {max_hops}}})
+                MATCH (start) WHERE elementId(start) = $eid
+                CALL apoc.path.subgraphAll(start, {{
+                    maxLevel: {max_hops},
+                    limit: $node_limit
+                }})
                 YIELD nodes, relationships
                 RETURN nodes, relationships
                 """,
-                name=entity_name,
+                eid=start_eid,
+                node_limit=node_limit,
             )
-            if not records:
-                return {"nodes": [], "relationships": []}
-            row = records[0]
-            return {
-                "nodes": row.get("nodes", []),
-                "relationships": row.get("relationships", []),
-            }
+            if records:
+                row = records[0]
+                return {
+                    "nodes": row.get("nodes", []),
+                    "relationships": row.get("relationships", []),
+                    "resolved_via": resolved_via,
+                    "anchor": anchor_name,
+                    "crm_company_id": getattr(company_hit, "crm_company_id", None),
+                }
         except _GRAPH_STORE_ERRORS:
             logger.debug("APOC not available, falling back to MATCH path query")
 
         records = await self._read(
             f"""
-            MATCH (start)
-            WHERE start.name = $name OR start.email = $name OR start.model = $name
-            OPTIONAL MATCH path = (start)-[r*1..{max_hops}]-(related)
+            MATCH (start) WHERE elementId(start) = $eid
+            OPTIONAL MATCH (start)-[r*1..{max_hops}]-(related)
+            WITH start, related, r
+            LIMIT $node_limit
             WITH start,
                  collect(DISTINCT related) AS related_nodes,
-                 [rel IN collect(DISTINCT r) | head(rel)] AS flat_rels
-            UNWIND (CASE WHEN size(flat_rels) = 0 THEN [null] ELSE flat_rels END) AS rel
-            WITH start, related_nodes,
-                 collect(CASE WHEN rel IS NOT NULL THEN
-                   {{type: type(rel), from: startNode(rel).name, to: endNode(rel).name}}
-                 END) AS rels
-            RETURN [start] + related_nodes AS nodes,
-                   [r IN rels WHERE r IS NOT NULL] AS relationships
+                 collect(DISTINCT last(r)) AS rels
+            RETURN [start] + [n IN related_nodes WHERE n IS NOT NULL] AS nodes,
+                   [rel IN rels WHERE rel IS NOT NULL |
+                     {{type: type(rel),
+                       from: startNode(rel).name,
+                       to: endNode(rel).name}}] AS relationships
             """,
-            name=entity_name,
+            eid=start_eid,
+            node_limit=node_limit,
         )
         if not records:
-            return {"nodes": [], "relationships": []}
+            return empty
         return {
             "nodes": records[0].get("nodes", []),
             "relationships": records[0].get("relationships", []),
+            "resolved_via": resolved_via,
+            "anchor": anchor_name,
+            "crm_company_id": getattr(company_hit, "crm_company_id", None),
         }
 
     _WRITE_KEYWORDS = frozenset({"CREATE", "DELETE", "DETACH", "SET", "REMOVE", "DROP"})
@@ -1586,9 +2367,18 @@ class KnowledgeGraph:
     ) -> list[dict[str, Any]]:
         """Execute a Cypher write query.  Internal use only."""
         p = params or {}
-        async with self._driver.session() as session:
-            result = await session.run(query, **p)
-            rows = [dict(record) async for record in result]
+        try:
+            async with self._driver.session() as session:
+                result = await session.run(query, **p)
+                rows = [dict(record) async for record in result]
+        except ServiceUnavailable as exc:
+            if not self._is_routing_unavailable(exc):
+                raise
+            if not await self._switch_to_bolt_direct():
+                raise
+            async with self._driver.session() as session:
+                result = await session.run(query, **p)
+                rows = [dict(record) async for record in result]
         if self._cloud_driver is not None:
             for attempt in range(2):
                 try:
@@ -1604,7 +2394,7 @@ class KnowledgeGraph:
                     httpx.HTTPError,
                     ValueError,
                     TypeError,
-                ) as exc:
+                ):
                     if attempt == 0:
                         logger.warning(
                             "Neo4j cloud mirror _run_cypher_write failed, retrying once",
@@ -1642,21 +2432,6 @@ class KnowledgeGraph:
         )
         created = result[0].get("created", 0) if result else 0
         logger.info("Enrichment: created %d INTERESTED_IN from quotes", created)
-        return created
-
-    async def enrich_manufactures(self) -> int:
-        """Link Acme Corp -[MANUFACTURES]-> all Machine nodes."""
-        result = await self._read(
-            """
-            MERGE (mc:Company {name: 'Acme Corp'})
-            WITH mc
-            MATCH (m:Machine) WHERE NOT (mc)-[:MANUFACTURES]->(m)
-            MERGE (mc)-[:MANUFACTURES]->(m)
-            RETURN count(*) AS created
-            """
-        )
-        created = result[0].get("created", 0) if result else 0
-        logger.info("Enrichment: created %d MANUFACTURES relationships", created)
         return created
 
     async def cleanup_labelless_orphans(self) -> int:
@@ -1701,46 +2476,21 @@ class KnowledgeGraph:
             "relationship_types": rel_types,
         }
 
-    # ── safe graph-consolidation helpers ─────────────────────────────────
-
-    async def find_active_node_names(self, since_days: int = 30) -> list[str]:
-        """Return names of nodes accessed within the last *since_days*."""
-        rows = await self._read(
-            "MATCH (n) WHERE n.last_accessed IS NOT NULL "
-            "AND n.last_accessed > datetime() - duration({days: $days}) "
-            "RETURN n.name AS name",
-            days=since_days,
-        )
-        return [r["name"] for r in rows if r.get("name")]
-
-    async def mark_nodes_stale(self, names: list[str]) -> int:
-        """Mark the given nodes as stale."""
-        result = await self._run_cypher_write(
-            "UNWIND $names AS name "
-            "MATCH (n) WHERE n.name = name "
-            "SET n._stale = true "
-            "RETURN count(n) AS marked",
-            params={"names": names},
-        )
-        return result[0].get("marked", 0) if result else 0
-
-    async def create_co_relevant_edge(self, name_a: str, name_b: str) -> int:
-        """Create a CO_RELEVANT relationship between two named nodes."""
-        result = await self._run_cypher_write(
-            "MATCH (a) WHERE a.name = $a "
-            "MATCH (b) WHERE b.name = $b "
-            "MERGE (a)-[r:CO_RELEVANT]->(b) "
-            "RETURN count(r) AS created",
-            params={"a": name_a, "b": name_b},
-        )
-        return result[0].get("created", 0) if result else 0
-
     # ── internals ────────────────────────────────────────────────────────
 
     async def _read(self, query: str, **params: Any) -> list[dict[str, Any]]:
-        async with self._driver.session() as session:
-            result = await session.run(query, **params)
-            return [dict(record) async for record in result]
+        try:
+            async with self._driver.session() as session:
+                result = await session.run(query, **params)
+                return [dict(record) async for record in result]
+        except ServiceUnavailable as exc:
+            if not self._is_routing_unavailable(exc):
+                raise
+            if not await self._switch_to_bolt_direct():
+                raise
+            async with self._driver.session() as session:
+                result = await session.run(query, **params)
+                return [dict(record) async for record in result]
 
     async def close(self) -> None:
         await self._driver.close()

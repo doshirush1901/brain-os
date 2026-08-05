@@ -17,7 +17,7 @@ def load_dream_checkpoint(checkpoint_path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
         return payload if isinstance(payload, dict) else {}
-    except Exception as exc:
+    except Exception:
         logger.debug("Dream checkpoint read failed", exc_info=True)
         return {}
 
@@ -58,5 +58,5 @@ def save_dream_checkpoint(
             json.dumps(payload, indent=2, default=str) + "\n",
             encoding="utf-8",
         )
-    except Exception as exc:
+    except Exception:
         logger.warning("Dream checkpoint write failed", exc_info=True)

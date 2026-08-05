@@ -41,6 +41,7 @@ class ToolStatsTracker:
         error_code: str | None = None,
         run_id: str | None = None,
         duration_ms: int | None = None,
+        query_term_count: int | None = None,
     ) -> None:
         """Record one tool invocation outcome."""
         async with self._lock:
@@ -58,8 +59,9 @@ class ToolStatsTracker:
                     error_code=error_code,
                     run_id=run_id,
                     duration_ms=duration_ms,
+                    query_term_count=query_term_count,
                 )
-            except (OSError, RuntimeError, ValueError, TypeError) as exc:
+            except (OSError, RuntimeError, ValueError, TypeError):
                 logger.debug("ToolInvocationStore.record failed", exc_info=True)
 
     async def record_delegation(

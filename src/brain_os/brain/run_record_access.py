@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from typing import Any
 
-from brain_os.brain.run_record_store import RunRecordStore
+from brain_os.brain.run_record_store import RunRecordStore, build_run_record_store
 from brain_os.config import get_settings
 from brain_os.schemas.run_record import RunRecord, RunRecordSummary
 
@@ -22,7 +23,7 @@ def run_records_enabled() -> bool:
 def _get_store() -> RunRecordStore:
     global _STORE
     if _STORE is None:
-        _STORE = RunRecordStore()
+        _STORE = build_run_record_store()
     return _STORE
 
 
@@ -87,3 +88,14 @@ async def list_run_summaries(
     except Exception:  # intentional — SQLite list must not break API/MCP callers
         logger.exception("list_run_summaries failed")
         return []
+
+
+async def branch_telemetry_rollup(
+    *,
+    since_hours: float = 1.0,
+    limit: int = 200,
+) -> dict[str, Any]:
+    """Public entry for ops snapshot / engineering tools."""
+    from brain_os.brain.branch_telemetry_rollup import compute_branch_telemetry_rollup
+
+    return await compute_branch_telemetry_rollup(since_hours=since_hours, limit=limit)

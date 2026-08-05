@@ -216,7 +216,7 @@ async def _generate_identity(
             session_id=session_id,
             user_id=user_id,
         )
-    except LLMError as exc:
+    except LLMError:
         logger.exception("Fast-path identity LLM call failed")
         return (
             "I'm Brain OS, the AI that runs Acme Corp — an industrial machinery "

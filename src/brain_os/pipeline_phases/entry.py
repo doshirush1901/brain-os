@@ -33,6 +33,37 @@ from brain_os.pipeline_runtime import (
 from brain_os.services.degradation import record_degradation_event
 
 
+def _graphe_short_circuit_log(
+    pipeline: Any,
+    *,
+    raw_input: str,
+    raw_response: str,
+    agents_used: list[str],
+    run_id: str,
+    channel: str,
+    route_method: str,
+    contact_email: str,
+    started_at: float,
+    trace: dict[str, Any],
+    early_exit: str | None = None,
+    dedup_hit: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "pantheon": pipeline._pantheon,
+        "query": raw_input,
+        "agents_used": agents_used,
+        "raw_response": raw_response,
+        "run_id": run_id,
+        "channel": channel,
+        "route_method": route_method,
+        "contact_email": contact_email,
+        "started_at": started_at,
+        "early_exit": early_exit or trace.get("early_exit"),
+        "dedup_hit": dedup_hit,
+        "email_scope": str(trace.get("email_scope") or "no_email"),
+    }
+
+
 @dataclass(frozen=True)
 class DedupRuntimeState:
     now: float
@@ -101,7 +132,10 @@ async def prepare_dedup_runtime_state(
     app_meta: Any,
 ) -> DedupRuntimeState:
     """Build dedup fingerprint state and load pending clarification state."""
-    pending = await pipeline._pop_clarification(sender_id)
+    from brain_os.services.socratic_gate import extract_gate_id
+
+    gate_id = str(meta.get("gate_id") or "").strip() or extract_gate_id(raw_input)
+    pending = await pipeline._pop_clarification(sender_id, gate_id=gate_id)
     now = time.monotonic()
     uncensored = int(bool(pipeline._uncensored_local_llm_active(meta)))
     fingerprint = hashlib.sha256(
@@ -173,6 +207,21 @@ async def maybe_short_circuit_dedup_hit(
                 raw_input=raw_input,
                 response_text=cached_shaped,
             )
+            from brain_os.brain.graphe_instrumentation import log_graphe_pipeline_turn
+
+            await log_graphe_pipeline_turn(
+                pipeline._pantheon,
+                query=raw_input,
+                agents_used=list(cached_agents),
+                raw_response=cached_shaped,
+                run_id=run_id,
+                channel=channel,
+                route_method="dedup_redis",
+                contact_email=sender_id,
+                pipeline_ms=0.0,
+                dedup_hit="redis",
+                early_exit=trace.get("early_exit"),
+            )
             return cached_shaped, list(cached_agents), run_id
 
     async with pipeline._state_lock:
@@ -211,6 +260,21 @@ async def maybe_short_circuit_dedup_hit(
                 agents_used=list(cached_agents_inproc),
                 raw_input=raw_input,
                 response_text=cached_resp,
+            )
+            from brain_os.brain.graphe_instrumentation import log_graphe_pipeline_turn
+
+            await log_graphe_pipeline_turn(
+                pipeline._pantheon,
+                query=raw_input,
+                agents_used=list(cached_agents_inproc),
+                raw_response=cached_resp,
+                run_id=run_id,
+                channel=channel,
+                route_method="dedup_inproc",
+                contact_email=sender_id,
+                pipeline_ms=0.0,
+                dedup_hit="inproc",
+                early_exit=trace.get("early_exit"),
             )
             return cached_resp, list(cached_agents_inproc), run_id
 
@@ -400,6 +464,18 @@ async def maybe_short_circuit_fast_path(
             encode_dedup_payload=_encode_dedup_payload,
         ),
         record_stage_fn=record_stage_fn,
+        graphe_log=_graphe_short_circuit_log(
+            pipeline,
+            raw_input=raw_input,
+            raw_response=fp_response,
+            agents_used=fp_agents,
+            run_id=run_id,
+            channel=channel,
+            route_method="fast_path",
+            contact_email=contact_email,
+            started_at=t0,
+            trace=trace,
+        ),
     )
 
 
@@ -494,6 +570,18 @@ async def _maybe_short_circuit_operator_deterministic_impl(
             encode_dedup_payload=_encode_dedup_payload,
         ),
         record_stage_fn=record_stage_fn,
+        graphe_log=_graphe_short_circuit_log(
+            pipeline,
+            raw_input=raw_input,
+            raw_response=op_raw,
+            agents_used=op_agents,
+            run_id=run_id,
+            channel=channel,
+            route_method="operator_deterministic",
+            contact_email=contact_email,
+            started_at=t0,
+            trace=trace,
+        ),
     )
 
 
@@ -590,6 +678,18 @@ async def maybe_short_circuit_quick_pipeline(
                 encode_dedup_payload=_encode_dedup_payload,
             ),
             record_stage_fn=record_stage_fn,
+            graphe_log=_graphe_short_circuit_log(
+                pipeline,
+                raw_input=raw_input,
+                raw_response=qp_raw,
+                agents_used=qp_agents,
+                run_id=run_id,
+                channel=channel,
+                route_method="quick_pipeline",
+                contact_email=contact_email,
+                started_at=t0,
+                trace=trace,
+            ),
         )
     except (DatabaseError, BrainOSError, Exception):
         record_degradation_event(trace, layer="crm", code="quick_pipeline_read_failed")

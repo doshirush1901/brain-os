@@ -28,7 +28,8 @@ from langfuse.openai import AsyncOpenAI
 from openai import AsyncOpenAI as OpenAICompatAsyncOpenAI
 from pydantic import BaseModel
 
-from brain_os.config import Settings, get_settings
+from brain_os.config import get_settings
+from brain_os.config.settings import Settings
 from brain_os.services.resilience import CircuitBreaker, RetryPolicy, run_with_retry
 
 logger = logging.getLogger(__name__)
@@ -99,6 +100,51 @@ def _helicone_session_user_headers(
     if user_id is not None and (uid := user_id.strip()):
         headers["Helicone-User-Id"] = uid[:_MAX_HELICONE_HEADER_VALUE_LEN]
     return headers
+
+
+def _parse_agent_tool_from_name(trace_name: str | None) -> tuple[str | None, str | None]:
+    """Split ``agent.tool`` trace names (e.g. ``prometheus.reason``) for Langfuse metadata."""
+    raw = (trace_name or "").strip()
+    if not raw or "." not in raw:
+        return None, None
+    agent, tool = raw.split(".", 1)
+    return (agent.strip() or None), (tool.strip() or None)
+
+
+def _build_langfuse_metadata(
+    *,
+    session_id: str | None,
+    user_id: str | None,
+    agent_name: str | None = None,
+    tool_name: str | None = None,
+    trace_name: str | None = None,
+) -> dict[str, Any]:
+    """Langfuse/OpenAI wrapper metadata for cost attribution by agent and tool."""
+    metadata: dict[str, Any] = {}
+    if session_id:
+        metadata["langfuse_session_id"] = session_id
+    if user_id:
+        metadata["langfuse_user_id"] = user_id
+    parsed_agent, parsed_tool = _parse_agent_tool_from_name(trace_name)
+    agent = (agent_name or parsed_agent or "").strip()
+    tool = (tool_name or parsed_tool or "").strip()
+    if agent:
+        metadata["agent_name"] = agent
+    if tool:
+        metadata["tool_name"] = tool
+    return metadata
+
+
+def _apply_langfuse_observation_metadata(metadata: dict[str, Any]) -> None:
+    """Attach metadata to the active Langfuse span (Anthropic @observe paths)."""
+    if not metadata:
+        return
+    try:
+        from langfuse.decorators import langfuse_context
+
+        langfuse_context.update_current_observation(metadata=metadata)
+    except Exception:  # noqa: BLE001 — langfuse SDK metadata update is best-effort
+        logger.debug("langfuse observation metadata update skipped", exc_info=True)
 
 
 class LLMClient:
@@ -190,6 +236,9 @@ class LLMClient:
         _av = (cfg.llm.brain_anthropic_model_verifier or "").strip() or _am
         self._anthropic_model_profiles = {
             "default": _am,
+            "cheap": _af,
+            "standard": _am,
+            "frontier": _ar,
             "fast": _af,
             "extract": _af,
             "extraction": _af,
@@ -204,6 +253,9 @@ class LLMClient:
         }
         self._model_profiles = {
             "default": cfg.llm.openai_model,
+            "cheap": cfg.llm.brain_model_fast,
+            "standard": cfg.llm.openai_model,
+            "frontier": cfg.llm.brain_model_reasoning,
             "fast": cfg.llm.brain_model_fast,
             "extract": cfg.llm.brain_model_fast,
             "extraction": cfg.llm.brain_model_fast,
@@ -253,6 +305,18 @@ class LLMClient:
         """Inject Redis cache for semantic response caching (optional)."""
         self._redis_cache = cache
 
+    @staticmethod
+    def _coerce_profile(
+        model_profile: str | None,
+        model_tier: str | None,
+    ) -> str | None:
+        """Prefer explicit profile; map tier (cheap|standard|frontier) when set."""
+        if model_profile and str(model_profile).strip():
+            return str(model_profile).strip()
+        if model_tier and str(model_tier).strip():
+            return str(model_tier).strip().lower().replace("-", "_")
+        return None
+
     def _resolve_model(
         self,
         provider: str,
@@ -275,6 +339,60 @@ class LLMClient:
         normalized = model_profile.strip().lower().replace("-", "_")
         return self._model_profiles.get(normalized, self._openai_model)
 
+    def _gate_and_prepare_spend(
+        self,
+        *,
+        provider: str,
+        model: str,
+        model_profile: str | None,
+        name: str | None,
+        agent_name: str | None,
+        tool_name: str | None,
+    ) -> None:
+        """Enforce daily USD governor and stamp caller context before a provider call."""
+        try:
+            from brain_os.services.llm_caller_context import merge_agent_into_caller
+            from brain_os.systems.llm_cost_governor import enforce_before_llm_call
+
+            merge_agent_into_caller(agent_name=agent_name, tool_name=tool_name or name)
+            enforce_before_llm_call()
+        except Exception as exc:  # noqa: BLE001 — budget errors are re-raised; other governor failures are non-fatal
+            from brain_os.systems.llm_cost_governor import LlmBudgetExceededError
+
+            if isinstance(exc, LlmBudgetExceededError):
+                raise
+            # Fail-open on unexpected governor bugs so operator work continues.
+            logger.debug("llm cost governor pre-check skipped: %s", exc)
+
+    def _record_call_spend(
+        self,
+        *,
+        provider: str,
+        model: str,
+        tokens_in: int,
+        tokens_out: int,
+        usage_source: str,
+        name: str | None,
+        agent_name: str | None,
+        tool_name: str | None,
+        model_profile: str | None,
+    ) -> None:
+        try:
+            from brain_os.services.llm_spend import record_llm_spend
+
+            record_llm_spend(
+                model=model,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                provider=provider,
+                usage_source=usage_source,
+                agent=agent_name,
+                call_site=tool_name or name,
+                tier=(model_profile or "").strip().lower() or None,
+            )
+        except Exception:  # noqa: BLE001 — spend recording is best-effort telemetry
+            logger.debug("llm spend record skipped", exc_info=True)
+
     @staticmethod
     def _openai_token_kwargs(model: str, max_tokens: int) -> dict[str, int]:
         """OpenAI newer reasoning models use max_completion_tokens."""
@@ -290,14 +408,44 @@ class LLMClient:
         return {"temperature": temperature}
 
     @staticmethod
+    def _llm_cache_scope(
+        *,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        contact_id: str | None = None,
+    ) -> str:
+        """Identity scope for cache isolation (empty = unscoped).
+
+        Unscoped keys never match scoped lookups, so a contact-scoped request
+        cannot be served an unscoped (or differently scoped) cache entry.
+        """
+        parts: list[str] = []
+        contact = (contact_id or "").strip()
+        uid = (user_id or "").strip()
+        sid = (session_id or "").strip()
+        if contact:
+            parts.append(f"contact:{contact}")
+        if uid:
+            parts.append(f"user:{uid}")
+        if sid:
+            parts.append(f"session:{sid}")
+        return "|".join(parts)
+
+    @staticmethod
     def _llm_cache_key(
         system: str,
         user: str,
         model: str,
         temperature: float,
         extra: str = "",
+        scope: str = "",
     ) -> str:
-        raw = f"{system[:2000]}|{user[:4000]}|{model}|{temperature:.2f}|{extra}"
+        """Hash full system+user text + model + temperature + identity scope.
+
+        Truncating prompts caused cross-prompt collisions (C-H2). Scope prevents
+        cross-contact reuse when identity is available at the call site.
+        """
+        raw = f"{system}|{user}|{model}|{temperature:.2f}|{extra}|scope:{scope or ''}"
         return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
     _LLM_CACHE_TTL = 86400  # 24 hours
@@ -313,12 +461,15 @@ class LLMClient:
         provider: str = "openai",
         model: str | None = None,
         model_profile: str | None = None,
+        model_tier: str | None = None,
         temperature: float = 0,
         max_tokens: int = 4096,
         max_user_chars: int = _STRUCTURED_DEFAULT_USER_CHARS,
         name: str | None = None,
         session_id: str | None = None,
         user_id: str | None = None,
+        agent_name: str | None = None,
+        tool_name: str | None = None,
     ) -> T:
         """Call an LLM and parse the response into a Pydantic model.
 
@@ -328,7 +479,11 @@ class LLMClient:
         ``max_user_chars`` truncates the *user* message before sending (default matches
         historic behaviour). Heavy callers such as Dream mode should pass a larger value
         so JSON / episode payloads are not cut mid-structure.
+
+        ``model_tier`` is ``cheap`` | ``standard`` | ``frontier`` (see docs/LLM_TIERS.md);
+        ignored when ``model_profile`` or ``model`` is set.
         """
+        model_profile = self._coerce_profile(model_profile, model_tier)
         chain = self._provider_fallback_chain(provider)
         if not chain:
             return response_model()
@@ -349,10 +504,10 @@ class LLMClient:
                         name=name,
                         session_id=session_id,
                         user_id=user_id,
+                        agent_name=agent_name,
+                        tool_name=tool_name,
                     )
-                except (
-                    Exception
-                ):  # intentional broad catch — provider fallback chain; raises if last
+                except Exception:  # noqa: BLE001 — provider fallback chain; raises if last
                     if i + 1 < len(chain):
                         logger.info("Falling back to %s for structured output", chain[i + 1])
                         continue
@@ -378,8 +533,19 @@ class LLMClient:
         name: str | None = None,
         session_id: str | None = None,
         user_id: str | None = None,
+        agent_name: str | None = None,
+        tool_name: str | None = None,
     ) -> T:
         resolved_model = self._resolve_model(provider, model, model_profile)
+        self._gate_and_prepare_spend(
+            provider=provider,
+            model=resolved_model,
+            model_profile=model_profile,
+            name=name,
+            agent_name=agent_name,
+            tool_name=tool_name,
+        )
+        cache_scope = self._llm_cache_scope(user_id=user_id, session_id=session_id)
         if self._redis_cache and temperature <= 0.2:
             try:
                 cache_key = self._llm_cache_key(
@@ -388,12 +554,13 @@ class LLMClient:
                     resolved_model,
                     temperature,
                     extra=f"structured:{response_model.__name__}",
+                    scope=cache_scope,
                 )
                 cached = await self._redis_cache.get_llm_cache(cache_key)
                 if cached is not None:
                     data = json.loads(cached)
                     return response_model.model_validate(data)
-            except (json.JSONDecodeError, Exception):
+            except (json.JSONDecodeError, Exception):  # noqa: BLE001 — Redis/decode failures fall through to a live LLM call
                 pass
         prov = provider.strip().lower()
         if prov == "openai":
@@ -408,6 +575,8 @@ class LLMClient:
                 name=name,
                 session_id=session_id,
                 user_id=user_id,
+                agent_name=agent_name,
+                tool_name=tool_name,
             )
         elif prov == "ollama":
             result = await self._ollama_structured(
@@ -432,6 +601,8 @@ class LLMClient:
                 name=name,
                 session_id=session_id,
                 user_id=user_id,
+                agent_name=agent_name,
+                tool_name=tool_name,
             )
         if self._redis_cache and temperature <= 0.2:
             try:
@@ -441,14 +612,34 @@ class LLMClient:
                     resolved_model,
                     temperature,
                     extra=f"structured:{response_model.__name__}",
+                    scope=cache_scope,
                 )
                 await self._redis_cache.set_llm_cache(
                     cache_key,
                     json.dumps(result.model_dump(), default=str),
                     ttl_seconds=self._LLM_CACHE_TTL,
                 )
-            except Exception:  # intentional broad catch — best-effort LLM cache I/O
+            except Exception:  # noqa: BLE001 — best-effort LLM cache I/O
                 pass
+        try:
+            from brain_os.services.llm_spend import estimate_tokens_from_text
+
+            out_txt = (
+                result.model_dump_json() if hasattr(result, "model_dump_json") else str(result)
+            )
+            self._record_call_spend(
+                provider=prov,
+                model=resolved_model,
+                tokens_in=estimate_tokens_from_text(system, user),
+                tokens_out=estimate_tokens_from_text(out_txt),
+                usage_source="estimated",
+                name=name,
+                agent_name=agent_name,
+                tool_name=tool_name,
+                model_profile=model_profile,
+            )
+        except Exception:  # noqa: BLE001 — structured spend estimate is best-effort telemetry
+            logger.debug("structured spend estimate skipped", exc_info=True)
         return result
 
     async def _openai_structured(
@@ -464,16 +655,20 @@ class LLMClient:
         name: str | None = None,
         session_id: str | None = None,
         user_id: str | None = None,
+        agent_name: str | None = None,
+        tool_name: str | None = None,
     ) -> T:
         if self._openai_instructor is None:
             return response_model()
 
         resolved_model = model or self._openai_model
-        metadata: dict[str, Any] = {}
-        if session_id:
-            metadata["langfuse_session_id"] = session_id
-        if user_id:
-            metadata["langfuse_user_id"] = user_id
+        metadata = _build_langfuse_metadata(
+            session_id=session_id,
+            user_id=user_id,
+            agent_name=agent_name,
+            tool_name=tool_name,
+            trace_name=name,
+        )
 
         helicone_headers = (
             _helicone_session_user_headers(session_id=session_id, user_id=user_id)
@@ -500,7 +695,7 @@ class LLMClient:
                     **({"metadata": metadata} if metadata else {}),
                     **({"extra_headers": helicone_headers} if helicone_headers else {}),
                 )
-            except Exception as exc:  # intentional broad catch — re-raised after log
+            except Exception as exc:  # noqa: BLE001 — provider SDK error re-raised after log
                 logger.warning("OpenAI structured attempt failed: %s", exc)
                 raise
 
@@ -511,7 +706,7 @@ class LLMClient:
                 is_retryable=_is_retryable_llm_error,
                 circuit_breaker=self._openai_breaker,
             )
-        except Exception as exc:  # intentional broad catch — re-raised after log
+        except Exception as exc:  # noqa: BLE001 — provider SDK error re-raised after log
             logger.warning(
                 "OpenAI structured call failed after retries: %s",
                 exc,
@@ -552,7 +747,7 @@ class LLMClient:
                         {"role": "user", "content": clipped_user},
                     ],
                 )
-            except Exception as exc:  # intentional broad catch — re-raised after log
+            except Exception as exc:  # noqa: BLE001 — provider SDK error re-raised after log
                 logger.warning("Ollama structured attempt failed: %s", exc)
                 raise
 
@@ -563,7 +758,7 @@ class LLMClient:
                 is_retryable=_is_retryable_llm_error,
                 circuit_breaker=self._ollama_breaker,
             )
-        except Exception as exc:  # intentional broad catch — re-raised after log
+        except Exception as exc:  # noqa: BLE001 — provider SDK error re-raised after log
             logger.warning(
                 "Ollama structured call failed after retries: %s",
                 exc,
@@ -585,11 +780,22 @@ class LLMClient:
         name: str | None = None,
         session_id: str | None = None,
         user_id: str | None = None,
+        agent_name: str | None = None,
+        tool_name: str | None = None,
     ) -> T:
         if self._anthropic_instructor is None:
             return response_model()
 
         resolved_model = model or self._anthropic_model
+        _apply_langfuse_observation_metadata(
+            _build_langfuse_metadata(
+                session_id=session_id,
+                user_id=user_id,
+                agent_name=agent_name,
+                tool_name=tool_name,
+                trace_name=name,
+            )
+        )
 
         helicone_headers = (
             _helicone_session_user_headers(session_id=session_id, user_id=user_id)
@@ -612,7 +818,7 @@ class LLMClient:
                     messages=[{"role": "user", "content": clipped_user}],
                     **({"extra_headers": helicone_headers} if helicone_headers else {}),
                 )
-            except Exception as exc:  # intentional broad catch — re-raised after log
+            except Exception as exc:  # noqa: BLE001 — provider SDK error re-raised after log
                 logger.warning("Anthropic structured attempt failed: %s", exc)
                 raise
 
@@ -623,7 +829,7 @@ class LLMClient:
                 is_retryable=_is_retryable_llm_error,
                 circuit_breaker=self._anthropic_breaker,
             )
-        except Exception as exc:  # intentional broad catch — re-raised after log
+        except Exception as exc:  # noqa: BLE001 — provider SDK error re-raised after log
             logger.warning(
                 "Anthropic structured call failed after retries: %s",
                 exc,
@@ -641,13 +847,17 @@ class LLMClient:
         provider: str = "openai",
         model: str | None = None,
         model_profile: str | None = None,
+        model_tier: str | None = None,
         temperature: float = 0.3,
         max_tokens: int = 4096,
         name: str | None = None,
         session_id: str | None = None,
         user_id: str | None = None,
+        agent_name: str | None = None,
+        tool_name: str | None = None,
     ) -> str:
         """Call an LLM and return the raw text response."""
+        model_profile = self._coerce_profile(model_profile, model_tier)
         chain = self._provider_fallback_chain(provider)
         if not chain:
             return "(No LLM provider configured)"
@@ -665,6 +875,8 @@ class LLMClient:
                     name=name,
                     session_id=session_id,
                     user_id=user_id,
+                    agent_name=agent_name,
+                    tool_name=tool_name,
                 )
                 if not result.startswith("("):
                     return result
@@ -686,17 +898,33 @@ class LLMClient:
         name: str | None = None,
         session_id: str | None = None,
         user_id: str | None = None,
+        agent_name: str | None = None,
+        tool_name: str | None = None,
     ) -> str:
         resolved_model = self._resolve_model(provider, model, model_profile)
+        self._gate_and_prepare_spend(
+            provider=provider,
+            model=resolved_model,
+            model_profile=model_profile,
+            name=name,
+            agent_name=agent_name,
+            tool_name=tool_name,
+        )
+        cache_scope = self._llm_cache_scope(user_id=user_id, session_id=session_id)
         if self._redis_cache and temperature <= 0.2:
             try:
                 cache_key = self._llm_cache_key(
-                    system, user, resolved_model, temperature, extra="text"
+                    system,
+                    user,
+                    resolved_model,
+                    temperature,
+                    extra="text",
+                    scope=cache_scope,
                 )
                 cached = await self._redis_cache.get_llm_cache(cache_key)
                 if cached is not None:
                     return cached
-            except Exception:  # intentional broad catch — best-effort LLM cache I/O
+            except Exception:  # noqa: BLE001 — best-effort LLM cache I/O
                 pass
         prov = provider.strip().lower()
         if prov == "openai":
@@ -709,6 +937,8 @@ class LLMClient:
                 name=name,
                 session_id=session_id,
                 user_id=user_id,
+                agent_name=agent_name,
+                tool_name=tool_name,
             )
         elif prov == "ollama":
             result = await self._ollama_text(
@@ -728,19 +958,53 @@ class LLMClient:
                 name=name,
                 session_id=session_id,
                 user_id=user_id,
+                agent_name=agent_name,
+                tool_name=tool_name,
             )
         if self._redis_cache and temperature <= 0.2 and not result.startswith("("):
             try:
                 cache_key = self._llm_cache_key(
-                    system, user, resolved_model, temperature, extra="text"
+                    system,
+                    user,
+                    resolved_model,
+                    temperature,
+                    extra="text",
+                    scope=cache_scope,
                 )
                 await self._redis_cache.set_llm_cache(
                     cache_key,
                     result,
                     ttl_seconds=self._LLM_CACHE_TTL,
                 )
-            except Exception:  # intentional broad catch — best-effort LLM cache I/O
+            except Exception:  # noqa: BLE001 — best-effort LLM cache I/O
                 pass
+        if result and not result.startswith("("):
+            usage = getattr(self, "_last_usage", None)
+            tokens_in = None
+            tokens_out = None
+            usage_source = "estimated"
+            if isinstance(usage, dict) and usage.get("model") == resolved_model:
+                tokens_in = usage.get("tokens_in")
+                tokens_out = usage.get("tokens_out")
+                usage_source = str(usage.get("usage_source") or "provider")
+                self._last_usage = None
+            if tokens_in is None or tokens_out is None:
+                from brain_os.services.llm_spend import estimate_tokens_from_text
+
+                tokens_in = estimate_tokens_from_text(system, user)
+                tokens_out = estimate_tokens_from_text(result)
+                usage_source = "estimated"
+            self._record_call_spend(
+                provider=prov,
+                model=resolved_model,
+                tokens_in=int(tokens_in),
+                tokens_out=int(tokens_out),
+                usage_source=usage_source,
+                name=name,
+                agent_name=agent_name,
+                tool_name=tool_name,
+                model_profile=model_profile,
+            )
         return result
 
     async def _openai_text(
@@ -754,16 +1018,20 @@ class LLMClient:
         name: str | None = None,
         session_id: str | None = None,
         user_id: str | None = None,
+        agent_name: str | None = None,
+        tool_name: str | None = None,
     ) -> str:
         if self._openai is None:
             return "(No OpenAI key configured)"
 
         resolved_model = model or self._openai_model
-        metadata: dict[str, Any] = {}
-        if session_id:
-            metadata["langfuse_session_id"] = session_id
-        if user_id:
-            metadata["langfuse_user_id"] = user_id
+        metadata = _build_langfuse_metadata(
+            session_id=session_id,
+            user_id=user_id,
+            agent_name=agent_name,
+            tool_name=tool_name,
+            trace_name=name,
+        )
 
         helicone_headers = (
             _helicone_session_user_headers(session_id=session_id, user_id=user_id)
@@ -785,6 +1053,14 @@ class LLMClient:
                 **({"metadata": metadata} if metadata else {}),
                 **({"extra_headers": helicone_headers} if helicone_headers else {}),
             )
+            usage = getattr(resp, "usage", None)
+            if usage is not None:
+                self._last_usage = {
+                    "model": resolved_model,
+                    "tokens_in": int(getattr(usage, "prompt_tokens", 0) or 0),
+                    "tokens_out": int(getattr(usage, "completion_tokens", 0) or 0),
+                    "usage_source": "provider",
+                }
             return resp.choices[0].message.content or ""
 
         try:
@@ -794,7 +1070,7 @@ class LLMClient:
                 is_retryable=_is_retryable_llm_error,
                 circuit_breaker=self._openai_breaker,
             )
-        except Exception as exc:  # intentional broad catch — duck-typed status across SDKs + httpx
+        except Exception as exc:  # noqa: BLE001 — duck-typed status across SDKs + httpx
             status = _status_code(exc)
             if status in (429, 402):
                 logger.warning("OpenAI %d — quota/rate limit", status)
@@ -839,7 +1115,7 @@ class LLMClient:
                 is_retryable=_is_retryable_llm_error,
                 circuit_breaker=self._ollama_breaker,
             )
-        except Exception as exc:  # intentional broad catch — duck-typed status across SDKs + httpx
+        except Exception as exc:  # noqa: BLE001 — duck-typed status across SDKs + httpx
             status = _status_code(exc)
             if status in (429, 402):
                 logger.warning("Ollama %d — rate limit", status)
@@ -862,11 +1138,22 @@ class LLMClient:
         name: str | None = None,
         session_id: str | None = None,
         user_id: str | None = None,
+        agent_name: str | None = None,
+        tool_name: str | None = None,
     ) -> str:
         if self._anthropic is None:
             return "(No Anthropic key configured)"
 
         resolved_model = model or self._anthropic_model
+        _apply_langfuse_observation_metadata(
+            _build_langfuse_metadata(
+                session_id=session_id,
+                user_id=user_id,
+                agent_name=agent_name,
+                tool_name=tool_name,
+                trace_name=name,
+            )
+        )
 
         helicone_headers = (
             _helicone_session_user_headers(session_id=session_id, user_id=user_id)
@@ -884,6 +1171,14 @@ class LLMClient:
                 messages=[{"role": "user", "content": user[:12_000]}],
                 **({"extra_headers": helicone_headers} if helicone_headers else {}),
             )
+            usage = getattr(resp, "usage", None)
+            if usage is not None:
+                self._last_usage = {
+                    "model": resolved_model,
+                    "tokens_in": int(getattr(usage, "input_tokens", 0) or 0),
+                    "tokens_out": int(getattr(usage, "output_tokens", 0) or 0),
+                    "usage_source": "provider",
+                }
             return resp.content[0].text
 
         try:
@@ -893,7 +1188,7 @@ class LLMClient:
                 is_retryable=_is_retryable_llm_error,
                 circuit_breaker=self._anthropic_breaker,
             )
-        except Exception as exc:  # intentional broad catch — duck-typed status across SDKs + httpx
+        except Exception as exc:  # noqa: BLE001 — duck-typed status across SDKs + httpx
             status = _status_code(exc)
             if status in (429, 402):
                 logger.warning("Anthropic %d — quota/rate limit", status)
@@ -916,11 +1211,15 @@ class LLMClient:
         max_tokens: int = 4096,
         model: str | None = None,
         model_profile: str | None = None,
+        model_tier: str | None = None,
         name: str | None = None,
         session_id: str | None = None,
         user_id: str | None = None,
+        agent_name: str | None = None,
+        tool_name: str | None = None,
     ) -> str:
         """Try *primary* then other configured providers (Ollama → OpenAI → Anthropic order)."""
+        model_profile = self._coerce_profile(model_profile, model_tier)
         chain = self._provider_fallback_chain(primary)
         if not chain:
             return "(No LLM provider configured)"
@@ -938,6 +1237,8 @@ class LLMClient:
                     name=name,
                     session_id=session_id,
                     user_id=user_id,
+                    agent_name=agent_name,
+                    tool_name=tool_name,
                 )
                 if not result.startswith("("):
                     return result
@@ -958,11 +1259,15 @@ class LLMClient:
         max_user_chars: int = _STRUCTURED_DEFAULT_USER_CHARS,
         model: str | None = None,
         model_profile: str | None = None,
+        model_tier: str | None = None,
         name: str | None = None,
         session_id: str | None = None,
         user_id: str | None = None,
+        agent_name: str | None = None,
+        tool_name: str | None = None,
     ) -> T:
         """Try *primary* then other configured providers until structured output validates."""
+        model_profile = self._coerce_profile(model_profile, model_tier)
         chain = self._provider_fallback_chain(primary)
         if not chain:
             return response_model()
@@ -983,10 +1288,10 @@ class LLMClient:
                         name=name,
                         session_id=session_id,
                         user_id=user_id,
+                        agent_name=agent_name,
+                        tool_name=tool_name,
                     )
-                except (
-                    Exception
-                ):  # intentional broad catch — provider fallback chain; raises if last
+                except Exception:  # noqa: BLE001 — provider fallback chain; raises if last
                     if i + 1 < len(chain):
                         logger.info("Falling back to %s for structured output", chain[i + 1])
                         continue
@@ -1043,7 +1348,7 @@ def get_llm_circuit_breaker_snapshots() -> list[dict[str, Any]]:
     """
     try:
         client = get_llm_client()
-    except Exception:  # intentional broad catch — return [] if client unconfigured
+    except Exception:  # noqa: BLE001 — returns [] when the client is unconfigured
         return []
     snapshots: list[dict[str, Any]] = []
     for name, breaker in (
@@ -1055,7 +1360,7 @@ def get_llm_circuit_breaker_snapshots() -> list[dict[str, Any]]:
             continue
         try:
             snap = breaker.public_snapshot()
-        except Exception:  # pragma: no cover — defensive
+        except Exception:  # noqa: BLE001 — defensive breaker snapshot  # pragma: no cover
             continue
         snap["name"] = name
         snapshots.append(snap)

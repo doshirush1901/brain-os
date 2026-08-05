@@ -4,6 +4,7 @@ Tools fronting ``srv._crm`` (Acme Corp CRM):
 - Deals: get_deal, list_deals, create_contact, update_deal, get_stale_leads
 - Search / pipeline: search_crm, get_pipeline_summary
 - Apollo.io enrichment + discovery: sync_crm_apollo, enrich_contact_apollo, search_people_apollo
+- People Data Labs: enrich_contact_pdl, verify_employment_pdl (employment truth / LinkedIn)
 
 Apollo tools live here despite not all touching ``srv._crm`` directly — they
 enrich the same data domain (contacts, companies) and the call sites overlap.
@@ -41,10 +42,31 @@ async def get_deal(deal_id: str) -> str:
         deal = await srv._crm.get_deal(deal_id)
         if deal is None:
             return f"Deal '{deal_id}' not found."
-        return json.dumps(srv._model_to_dict(deal), indent=2, default=str)
-    except Exception as exc:
+        payload = srv._model_to_dict(deal)
+        _attach_win_score(payload)
+        return json.dumps(payload, indent=2, default=str)
+    except Exception as exc:  # noqa: BLE001 — MCP tool boundary: failures are returned to the client as text
         logger.exception("MCP get_deal failed")
         return f"Error: {exc}"
+
+
+def _attach_win_score(deal_payload: dict[str, Any]) -> None:
+    """Best-effort: attach ``win_score``/``win_summary`` (or ``win_prob``/``factors``) in place.
+
+    Never raises — scoring is advisory context on top of the CRM record, not a
+    field the caller can depend on existing.
+    """
+    try:
+        from brain_os.services.deal_win_scorer import score_deal_dict
+
+        score = score_deal_dict(deal_payload, log=False)
+        deal_payload["win_score"] = score.win_probability
+        deal_payload["win_prob"] = score.win_probability
+        deal_payload["win_summary"] = score.summary
+        deal_payload["win_confidence"] = score.confidence
+        deal_payload["factors"] = [f.model_dump() for f in score.factors[:5]]
+    except Exception:  # noqa: BLE001 — win-score attach is optional enrichment
+        logger.debug("MCP: win score attach skipped", exc_info=True)
 
 
 async def list_deals(
@@ -76,8 +98,10 @@ async def list_deals(
             filters["source_mailbox"] = source_mailbox.strip()
         deals = await srv._crm.list_deals(filters=filters if filters else None)
         result = [srv._model_to_dict(d) for d in deals[:limit]]
+        for row in result:
+            _attach_win_score(row)
         return json.dumps(result, indent=2, default=str)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — MCP tool boundary: failures are returned to the client as text
         logger.exception("MCP list_deals failed")
         return f"Error: {exc}"
 
@@ -115,7 +139,7 @@ async def create_contact(
             kwargs["role"] = role
         contact = await srv._crm.create_contact(**kwargs)
         return json.dumps(srv._model_to_dict(contact), indent=2, default=str)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — MCP tool boundary: failures are returned to the client as text
         logger.exception("MCP create_contact failed")
         return f"Error: {exc}"
 
@@ -150,7 +174,7 @@ async def update_deal(
         if deal is None:
             return f"Deal '{deal_id}' not found."
         return json.dumps(srv._model_to_dict(deal), indent=2, default=str)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — MCP tool boundary: failures are returned to the client as text
         logger.exception("MCP update_deal failed")
         return f"Error: {exc}"
 
@@ -169,7 +193,7 @@ async def get_stale_leads(days: int = 14) -> str:
     try:
         leads = await srv._crm.get_stale_leads(days=days)
         return json.dumps(leads, indent=2, default=str)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — MCP tool boundary: failures are returned to the client as text
         logger.exception("MCP get_stale_leads failed")
         return f"Error: {exc}"
 
@@ -213,7 +237,7 @@ async def search_crm(query: str) -> str:
         ][:10]
 
         return json.dumps({"contacts": contacts, "companies": companies}, indent=2, default=str)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — MCP tool boundary: failures are returned to the client as text
         logger.exception("MCP search_crm failed")
         return f"Error: {exc}"
 
@@ -232,7 +256,7 @@ async def get_pipeline_summary() -> str:
     try:
         summary = await srv._crm.get_pipeline_summary()
         return json.dumps(summary, indent=2, default=str)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — MCP tool boundary: failures are returned to the client as text
         logger.exception("MCP get_pipeline_summary failed")
         return f"Error: {exc}"
 
@@ -274,7 +298,7 @@ async def sync_crm_apollo(
             f"companies updated: {result['companies_updated']}, "
             f"skipped (no email): {result['skipped_no_email']}, no match: {result['no_match']}, errors: {result['errors']}."
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — MCP tool boundary: failures are returned to the client as text
         logger.exception("MCP sync_crm_apollo failed")
         return f"Error: {exc}"
 
@@ -325,8 +349,108 @@ async def enrich_contact_apollo(
         if not result:
             return "No Apollo match for the given identifiers."
         return json.dumps(result, indent=2, default=str)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — MCP tool boundary: failures are returned to the client as text
         logger.exception("MCP enrich_contact_apollo failed")
+        return f"Error: {exc}"
+
+
+async def enrich_contact_pdl(
+    email: str = "",
+    name: str = "",
+    company_or_domain: str = "",
+    linkedin_url: str = "",
+) -> str:
+    """Enrich one person via People Data Labs person/enrich (title, employer, LinkedIn). Uses credits.
+
+    Prefer email or linkedin_url; name+company/domain also works. Does not write to CRM.
+    For employment truth vs a claimed company, prefer verify_employment_pdl.
+    """
+    from brain_os.interfaces import mcp_server as srv
+
+    await srv._ensure_initialized()
+    try:
+        from brain_os.config import get_settings
+
+        pdl = get_settings().people_data_labs
+        if not pdl.enabled or not pdl.api_key.get_secret_value().strip():
+            return "PEOPLE_DATA_LABS_API_KEY not set (or PEOPLE_DATA_LABS_ENABLED=false)."
+
+        if (
+            not (email or "").strip()
+            and not (linkedin_url or "").strip()
+            and not ((name or "").strip() and (company_or_domain or "").strip())
+        ):
+            return "Provide email, linkedin_url, or name+company_or_domain."
+
+        from brain_os.systems.pdl_client import enrich_person_async
+
+        company = None
+        website = None
+        if (company_or_domain or "").strip():
+            s = company_or_domain.strip()
+            if "." in s and " " not in s:
+                website = s
+            else:
+                company = s
+
+        result = await enrich_person_async(
+            email=email.strip() or None,
+            name=name.strip() or None,
+            company=company,
+            website=website,
+            linkedin_url=linkedin_url.strip() or None,
+        )
+        if not result:
+            return "No PDL match for the given identifiers."
+        return json.dumps(result, indent=2, default=str)
+    except Exception as exc:  # noqa: BLE001 — MCP tool boundary: failures are returned to the client as text
+        logger.exception("MCP enrich_contact_pdl failed")
+        return f"Error: {exc}"
+
+
+async def verify_employment_pdl(
+    claimed_company_or_domain: str,
+    email: str = "",
+    name: str = "",
+    linkedin_url: str = "",
+) -> str:
+    """Verify whether a contact still works at claimed_company_or_domain via PDL. Uses credits.
+
+    Returns status: still_there | left | unverified | no_match | error.
+    Use before Tinder/region outbound when Apollo may be stale.
+    """
+    from brain_os.interfaces import mcp_server as srv
+
+    await srv._ensure_initialized()
+    try:
+        from brain_os.config import get_settings
+
+        pdl = get_settings().people_data_labs
+        if not pdl.enabled or not pdl.api_key.get_secret_value().strip():
+            return "PEOPLE_DATA_LABS_API_KEY not set (or PEOPLE_DATA_LABS_ENABLED=false)."
+
+        claimed = (claimed_company_or_domain or "").strip()
+        if not claimed:
+            return "claimed_company_or_domain is required."
+
+        if (
+            not (email or "").strip()
+            and not (linkedin_url or "").strip()
+            and not (name or "").strip()
+        ):
+            return "Provide at least one of: email, name, or linkedin_url."
+
+        from brain_os.systems.pdl_client import verify_employment_async
+
+        result = await verify_employment_async(
+            email=email.strip() or None,
+            name=name.strip() or None,
+            claimed_company_or_domain=claimed,
+            linkedin_url=linkedin_url.strip() or None,
+        )
+        return json.dumps(result, indent=2, default=str)
+    except Exception as exc:  # noqa: BLE001 — MCP tool boundary: failures are returned to the client as text
+        logger.exception("MCP verify_employment_pdl failed")
         return f"Error: {exc}"
 
 
@@ -334,6 +458,7 @@ async def search_people_apollo(
     person_titles: str,
     organization_name: str = "",
     organization_domains: str = "",
+    person_locations: str = "",
     page: int = 1,
     per_page: int = 10,
     max_email_reveals: int = 3,
@@ -343,6 +468,8 @@ async def search_people_apollo(
     person_titles: comma-separated job titles (required), e.g. "CEO,VP Sales".
     organization_name: optional company keyword for q_keywords.
     organization_domains: optional comma-separated domains to narrow results.
+    person_locations: optional comma-separated locations for Apollo person_locations[]
+        (e.g. "India" or "India,Maharashtra").
     Requires an Apollo API key with api_search access for mixed_people/api_search.
     """
     from brain_os.interfaces import mcp_server as srv
@@ -365,6 +492,7 @@ async def search_people_apollo(
 
         org_names = [organization_name.strip()] if organization_name.strip() else []
         domains = _parts(organization_domains) or None
+        locations = _parts(person_locations) or None
         page_i = max(1, int(page))
         per_i = min(25, max(1, int(per_page)))
         reveals = min(5, max(0, int(max_email_reveals)))
@@ -373,6 +501,7 @@ async def search_people_apollo(
             organization_names=org_names,
             person_titles=titles,
             organization_domains=domains,
+            person_locations=locations,
             page=page_i,
             per_page=per_i,
             max_email_reveals=reveals,
@@ -380,10 +509,10 @@ async def search_people_apollo(
         if not rows:
             return (
                 "No people returned (no matches, blocked api_search, or reveals found nothing). "
-                "Try different titles/domains."
+                "Try different titles/domains/locations."
             )
         return json.dumps(rows, indent=2, default=str)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — MCP tool boundary: failures are returned to the client as text
         logger.exception("MCP search_people_apollo failed")
         return f"Error: {exc}"
 
@@ -399,4 +528,6 @@ def register(mcp: FastMCP) -> None:
     mcp.tool()(hardened_mcp_tool(get_pipeline_summary))
     mcp.tool()(hardened_mcp_tool(sync_crm_apollo))
     mcp.tool()(hardened_mcp_tool(enrich_contact_apollo))
+    mcp.tool()(hardened_mcp_tool(enrich_contact_pdl))
+    mcp.tool()(hardened_mcp_tool(verify_employment_pdl))
     mcp.tool()(hardened_mcp_tool(search_people_apollo))

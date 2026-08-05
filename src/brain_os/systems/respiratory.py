@@ -55,10 +55,13 @@ class RespiratorySystem:
         bus: Any | None = None,
         inhale_hour: int = 6,
         inhale_minute: int = 0,
+        morning_brain_hour: int = 6,
+        morning_brain_minute: int = 30,
         exhale_hour: int = 22,
         exhale_minute: int = 0,
         heartbeat_interval_seconds: int = 300,
         deep_consolidation_interval_hours: float = 6.0,
+        morning_brain_enabled: bool = True,
     ) -> None:
         self._dream_mode = dream_mode
         self._drip_engine = drip_engine
@@ -69,6 +72,9 @@ class RespiratorySystem:
 
         self._inhale_hour = inhale_hour
         self._inhale_minute = inhale_minute
+        self._morning_brain_hour = morning_brain_hour
+        self._morning_brain_minute = morning_brain_minute
+        self._morning_brain_enabled = morning_brain_enabled
         self._exhale_hour = exhale_hour
         self._exhale_minute = exhale_minute
         self._heartbeat_interval = heartbeat_interval_seconds
@@ -93,7 +99,14 @@ class RespiratorySystem:
                     datetime.now(UTC).isoformat(),
                     vitals,
                 )
-                if self._is_unhealthy(vitals) and self._immune_system is not None:
+                unhealthy = self._is_unhealthy(vitals)
+                try:
+                    from brain_os.systems.breath_log import record_breath
+
+                    record_breath(vitals, status="unhealthy" if unhealthy else "ok")
+                except _RESP_TASK_ERRORS:
+                    logger.debug("Breath log record failed", exc_info=True)
+                if unhealthy and self._immune_system is not None:
                     await self._immune_system.respond(vitals)
             except _RESP_TASK_ERRORS:
                 logger.exception("Heartbeat iteration failed")
@@ -129,10 +142,18 @@ class RespiratorySystem:
         logger.info("INHALE cycle starting")
 
         try:
+            from brain_os.brain.eat_pending import ingest_pending_eat_digests
+            from brain_os.brain.imports_metadata_index import build_index
             from brain_os.brain.ingestion_gatekeeper import run_ingestion_cycle
 
+            # Discover new/changed drops under data/imports before gatekeeper scan.
+            index_stats = await build_index(use_llm=False, force=False)
+            logger.info("INHALE imports metadata index: %s", index_stats)
             result = await run_ingestion_cycle()
             logger.info("INHALE Alexandros ingestion: %s", result)
+            # Catch EAT digests written in Cursor but never ingested (lock / agent stop).
+            eat_sweep = await ingest_pending_eat_digests(limit=25)
+            logger.info("INHALE EAT pending sweep: %s", eat_sweep)
         except _RESP_TASK_ERRORS:
             logger.exception("INHALE Alexandros ingestion failed")
 
@@ -222,6 +243,20 @@ class RespiratorySystem:
         else:
             logger.debug("EXHALE skipping goal sweep (GoalManager not configured)")
 
+        try:
+            from brain_os.services.top100_campaign import run_top100_weekly_if_due
+
+            top100_result = await run_top100_weekly_if_due(
+                email_processor=self._email_processor,
+            )
+            if top100_result.get("status") != "skipped":
+                summary_parts.append(
+                    f"Top100 campaign: queued={top100_result.get('queued_count', 0)} "
+                    f"skipped={top100_result.get('skipped_count', 0)}"
+                )
+        except _RESP_TASK_ERRORS:
+            logger.exception("EXHALE top100 campaign failed")
+
         summary = (
             "Brain OS Daily Exhale Report\n" + "\n".join(summary_parts)
             if summary_parts
@@ -234,6 +269,28 @@ class RespiratorySystem:
     async def run_inhale_cycle(self) -> None:
         """Run a single inhale cycle on demand (CLI / Cursor use)."""
         await self._inhale()
+
+    async def _morning_brain(self) -> None:
+        if not self._morning_brain_enabled:
+            logger.debug("MORNING BRAIN skipping (disabled)")
+            return
+        logger.info("MORNING BRAIN cycle starting")
+        try:
+            from brain_os.services.morning_brain import run_morning_brain
+
+            result = await run_morning_brain(trigger="respiratory:06:30")
+            logger.info(
+                "MORNING BRAIN complete: ok=%s actions=%s must_act=%s",
+                result.get("ok"),
+                len((result.get("report") or {}).get("actions") or []),
+                (result.get("report") or {}).get("must_act_count"),
+            )
+        except _RESP_TASK_ERRORS:
+            logger.exception("MORNING BRAIN cycle failed")
+
+    async def run_morning_brain_cycle(self) -> None:
+        """Run Morning Brain on demand (CLI / cron fallback)."""
+        await self._morning_brain()
 
     async def run_exhale_cycle(self) -> None:
         """Run a single exhale cycle on demand (CLI / Cursor use)."""
@@ -268,6 +325,13 @@ class RespiratorySystem:
             id="inhale",
             replace_existing=True,
         )
+        if self._morning_brain_enabled:
+            self._scheduler.add_job(
+                self._morning_brain,
+                CronTrigger(hour=self._morning_brain_hour, minute=self._morning_brain_minute),
+                id="morning_brain",
+                replace_existing=True,
+            )
         self._scheduler.add_job(
             self._exhale,
             CronTrigger(hour=self._exhale_hour, minute=self._exhale_minute),

@@ -93,6 +93,22 @@ class RedisCache:
             logger.warning("Redis SET failed for %s", key, exc_info=True)
             return False
 
+    async def set_nx(self, key: str, value: str, *, ttl_seconds: int) -> bool:
+        """SET key only if absent (NX) with expiry. Used by distributed mutexes."""
+        if self._client is None:
+            return False
+        try:
+            result = await self._client.set(
+                f"{_KEY_PREFIX}{key}",
+                value,
+                ex=max(1, int(ttl_seconds)),
+                nx=True,
+            )
+            return bool(result)
+        except aioredis.RedisError:
+            logger.warning("Redis SET NX failed for %s", key, exc_info=True)
+            return False
+
     async def delete(self, key: str) -> bool:
         if self._client is None:
             return False
@@ -101,6 +117,23 @@ class RedisCache:
             return True
         except aioredis.RedisError:
             logger.warning("Redis DELETE failed for %s", key, exc_info=True)
+            return False
+
+    async def delete_if_value(self, key: str, expected: str) -> bool:
+        """Atomically delete *key* only when its value equals *expected*."""
+        if self._client is None:
+            return False
+        try:
+            deleted = await self._client.eval(
+                "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                "return redis.call('del', KEYS[1]) else return 0 end",
+                1,
+                f"{_KEY_PREFIX}{key}",
+                expected,
+            )
+            return int(deleted or 0) > 0
+        except (aioredis.RedisError, TypeError, ValueError):
+            logger.warning("Redis compare-and-delete failed for %s", key, exc_info=True)
             return False
 
     async def incrby(

@@ -7,6 +7,7 @@ during the pipeline, and Dream Mode writes first-person journal entries.
 from __future__ import annotations
 
 import logging
+import sqlite3
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -88,7 +89,7 @@ class AgentJournal:
                 (agent_name, d.isoformat(), action_text, outcome, now),
             )
             await self._db.commit()
-        except Exception as exc:
+        except (sqlite3.Error, RuntimeError, ValueError, TypeError, IndexError):
             logger.warning("AgentJournal.log_action failed for %s", agent_name, exc_info=True)
 
     async def get_todays_actions(self, agent_name: str) -> list[dict[str, Any]]:
@@ -112,7 +113,7 @@ class AgentJournal:
             rows = await cursor.fetchall()
             await cursor.close()
             return [{"action_text": r[0], "outcome": r[1], "created_at": r[2]} for r in rows]
-        except Exception as exc:
+        except (sqlite3.Error, RuntimeError, ValueError, TypeError, IndexError):
             logger.warning("AgentJournal.get_actions_for_date failed", exc_info=True)
             return []
 
@@ -128,7 +129,7 @@ class AgentJournal:
             rows = await cursor.fetchall()
             await cursor.close()
             return [r[0] for r in rows]
-        except Exception as exc:
+        except (sqlite3.Error, RuntimeError, ValueError, TypeError, IndexError):
             logger.warning("AgentJournal.get_agents_with_actions_for_date failed", exc_info=True)
             return []
 
@@ -145,7 +146,7 @@ class AgentJournal:
             rows = await cursor.fetchall()
             await cursor.close()
             return [r[0] for r in rows]
-        except Exception as exc:
+        except (sqlite3.Error, RuntimeError, ValueError, TypeError, IndexError):
             logger.warning("AgentJournal.get_agents_with_actions_since_hours failed", exc_info=True)
             return []
 
@@ -169,7 +170,7 @@ class AgentJournal:
             rows = await cursor.fetchall()
             await cursor.close()
             return [{"action_text": r[0], "outcome": r[1], "created_at": r[2]} for r in rows]
-        except Exception as exc:
+        except (sqlite3.Error, RuntimeError, ValueError, TypeError, IndexError):
             logger.warning("AgentJournal.get_actions_since_hours failed", exc_info=True)
             return []
 
@@ -195,7 +196,7 @@ class AgentJournal:
                 (agent_name, d.isoformat(), reflection_text, mood, now),
             )
             await self._db.commit()
-        except Exception as exc:
+        except (sqlite3.Error, RuntimeError, ValueError, TypeError, IndexError):
             logger.warning(
                 "AgentJournal.save_journal_entry failed for %s", agent_name, exc_info=True
             )
@@ -247,7 +248,7 @@ class AgentJournal:
                 }
                 for r in rows
             ]
-        except Exception as exc:
+        except (sqlite3.Error, RuntimeError, ValueError, TypeError, IndexError):
             logger.warning("AgentJournal.search_past_journals failed", exc_info=True)
             return []
 
@@ -269,7 +270,7 @@ class AgentJournal:
             row = await cursor.fetchone()
             await cursor.close()
             return row[0] if row else None
-        except Exception as exc:
+        except (sqlite3.Error, RuntimeError, ValueError, TypeError, IndexError):
             logger.warning("AgentJournal.get_latest_journal_entry failed", exc_info=True)
             return None
 
@@ -297,7 +298,7 @@ class AgentJournal:
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=UTC)
             return dt
-        except Exception as exc:
+        except (sqlite3.Error, RuntimeError, ValueError, TypeError, IndexError):
             logger.warning("AgentJournal.get_latest_journal_created_at failed", exc_info=True)
             return None
 
@@ -321,7 +322,7 @@ class AgentJournal:
             rows = await cursor.fetchall()
             await cursor.close()
             return [{"action_text": r[0], "outcome": r[1], "created_at": r[2]} for r in rows]
-        except Exception as exc:
+        except (sqlite3.Error, RuntimeError, ValueError, TypeError, IndexError):
             logger.warning("AgentJournal.get_actions_since_datetime failed", exc_info=True)
             return []
 

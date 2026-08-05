@@ -156,40 +156,86 @@ async def get_company_icp_profile(
 
     Match by company name, domain host, or full website URL.
     """
+    from brain_os.brain.icp_profile_access import fetch_company_icp_profile, normalize_icp_lookup
     from brain_os.interfaces import mcp_server as srv
 
     await srv._ensure_initialized()
-    if srv._knowledge_graph is None:
-        return json.dumps({"ok": False, "error": "Knowledge graph not available."}, indent=2)
+    co, dom, web = normalize_icp_lookup(
+        company_name=company_name,
+        domain=domain,
+        website=website,
+    )
 
-    web = (website or "").strip()
-    dom = (domain or "").strip().lower()
-    if dom.startswith("www."):
-        dom = dom[4:]
-    if dom and not web:
-        web = f"https://{dom}/"
+    if srv._knowledge_graph is None:
+        return json.dumps(
+            {
+                "ok": False,
+                "error": "knowledge_graph_unavailable",
+                "company_name": co,
+                "domain": dom,
+                "website": web,
+            },
+            indent=2,
+        )
 
     try:
-        row = await srv._knowledge_graph.get_company_icp_profile(
-            name=company_name,
+        row = await fetch_company_icp_profile(
+            knowledge_graph=srv._knowledge_graph,
+            company_name=co,
+            domain=dom,
             website=web,
         )
     except Exception as exc:
         logger.exception("MCP get_company_icp_profile failed")
-        return json.dumps({"ok": False, "error": str(exc)}, indent=2)
+        return json.dumps(
+            {"ok": False, "error": str(exc)[:300], "company_name": co, "domain": dom},
+            indent=2,
+        )
 
     if row is None:
         return json.dumps(
             {
                 "ok": False,
                 "error": "company_not_found",
-                "company_name": company_name,
+                "company_name": co,
                 "domain": dom,
                 "website": web,
+                "hint": "Run brain leads classify-thermoformers --sync-neo4j or industrial former site ingest.",
             },
             indent=2,
         )
     return json.dumps({"ok": True, "icp": row}, indent=2, default=str)
+
+
+async def find_intro_paths_mcp(
+    target_company: str,
+    max_hops: int = 5,
+    limit: int = 5,
+) -> str:
+    """Intro paths from Acme Corp-strong nodes to a target company (G3).
+
+    Plain Cypher shortestPath via shared contacts / exhibitions / vendors.
+    For Argus / NA-sales dossiers — never sends mail.
+    """
+    from brain_os.interfaces import mcp_server as srv
+    from brain_os.services.graph_analytics import find_intro_paths
+
+    await srv._ensure_initialized()
+    kg = srv._knowledge_graph
+    if kg is None:
+        return json.dumps({"ok": False, "error": "Knowledge graph not available."})
+
+    try:
+        result = await find_intro_paths(
+            kg,
+            target_company,
+            max_hops=max(2, min(int(max_hops), 6)),
+            limit=max(1, min(int(limit), 20)),
+        )
+        return json.dumps(result, indent=2, default=str)
+    except Exception as exc:
+        logger.exception("MCP find_intro_paths failed")
+        return json.dumps({"ok": False, "error": str(exc)[:300]})
 
 
 def register(mcp: FastMCP) -> None:
@@ -200,3 +246,4 @@ def register(mcp: FastMCP) -> None:
     mcp.tool()(hardened_mcp_tool(find_company_quotes))
     mcp.tool()(hardened_mcp_tool(find_similar_companies_mcp))
     mcp.tool()(hardened_mcp_tool(get_company_context_graph))
+    mcp.tool()(hardened_mcp_tool(find_intro_paths_mcp))

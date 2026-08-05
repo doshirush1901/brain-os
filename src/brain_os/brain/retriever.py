@@ -23,6 +23,7 @@ from typing import Any
 import httpx
 from flashrank import Ranker, RerankRequest
 from langfuse.decorators import observe
+from neo4j.exceptions import Neo4jError
 
 from brain_os.brain import query_rewrite as _qr
 from brain_os.brain.context_graph_expand import (
@@ -42,7 +43,31 @@ from brain_os.schemas.llm_outputs import EntityNames, SubQueries
 from brain_os.services.llm_client import get_llm_client
 from brain_os.services.resilience import CircuitBreaker, RetryPolicy, run_with_retry
 
+try:
+    from voyageai.error import VoyageError as _VoyageError
+except ImportError:  # pragma: no cover — voyage optional in some test envs
+    _VoyageError = ()  # type: ignore[misc, assignment]
+
 logger = logging.getLogger(__name__)
+
+# Soft-fail backends: Neo4j AuthError / Voyage APIError historically bubbled out of
+# search_knowledge (tool_invocations error_code AuthError/APIError, June 2026).
+_BACKEND_SOFT_ERRORS: tuple[type[BaseException], ...] = (
+    DatabaseError,
+    Neo4jError,
+    httpx.HTTPError,
+    OSError,
+    ValueError,
+    TypeError,
+    AttributeError,
+    KeyError,
+    RuntimeError,
+    BrainOSError,
+    LLMError,
+    IngestionError,
+)
+if _VoyageError:
+    _BACKEND_SOFT_ERRORS = (*_BACKEND_SOFT_ERRORS, _VoyageError)  # type: ignore[assignment]
 
 _DECOMPOSE_SYSTEM_PROMPT = load_prompt("decompose_query")
 
@@ -50,6 +75,41 @@ _DECOMPOSE_SYSTEM_PROMPT = load_prompt("decompose_query")
 #: at request time is read from ``Settings.llm_endpoints.voyage_rerank_url``.
 #: This constant remains for backward compatibility with anything importing it.
 _VOYAGE_RERANK_URL = "https://api.voyageai.com/v1/rerank"
+
+
+#: Mem0 retrievals are metered; the default fan-out only includes Mem0 when
+#: the query plausibly targets conversational memory rather than the KB.
+_MEMORY_FLAVOR_PATTERNS = (
+    r"\bremember(ed|s|ing)?\b",
+    r"\brecall(ed|s)?\b",
+    r"\bmemor(y|ies|ize|ized)\b",
+    r"\bprefer(s|red|ence|ences)?\b",
+    r"\blast\s+time\b",
+    r"\bwe\s+(discussed|talked|spoke|agreed)\b",
+    r"\b(you|i)\s+(said|told|mentioned|asked)\b",
+    r"\bcorrect(ion|ions|ed)\b",
+    r"\bepisodes?\b",
+    r"\babout\s+me\b",
+    r"\bconversations?\b",
+    r"\brelationship\b",
+)
+
+_memory_flavor_regexes_cache: tuple[Any, ...] | None = None
+
+
+def query_is_memory_flavored(query: str) -> bool:
+    """Deterministic check: does *query* target conversational/personal memory?"""
+    global _memory_flavor_regexes_cache
+    if _memory_flavor_regexes_cache is None:
+        import re
+
+        _memory_flavor_regexes_cache = tuple(
+            re.compile(p, re.IGNORECASE) for p in _MEMORY_FLAVOR_PATTERNS
+        )
+    text = (query or "").strip()
+    if not text:
+        return False
+    return any(rx.search(text) for rx in _memory_flavor_regexes_cache)
 
 
 def _keyword_score(query: str, content: str, source: str = "") -> float:
@@ -69,6 +129,27 @@ _TRUSTED_SOURCE_SUBSTRINGS = (
 _TRUSTED_SOURCE_SCORE_BOOST = 0.08
 _TEACHER_CANON_SCORE_BOOST = 0.06
 _TEACHER_TARGETED_BOOST = 0.04
+# Commercial-intent boost: prefer chunks flagged has_quote / has_price when the
+# query is about quotes, pricing, or commercial terms (backfilled payload flags).
+_QUOTE_SIGNAL_BOOST = 0.06
+_PRICE_SIGNAL_BOOST = 0.03
+_QUOTE_QUERY_MARKERS = (
+    "quote",
+    "quotation",
+    "price",
+    "pricing",
+    "cost",
+    "budget",
+    "proforma",
+    "commercial offer",
+    "offer no",
+    "rate for",
+    "how much",
+    "inr",
+    "usd",
+    "lakh",
+    "crore",
+)
 _TEACHER_QUERY_MARKERS = (
     "constitutional ai",
     "model spec",
@@ -180,6 +261,29 @@ def query_triggers_teacher_boost(query: str) -> bool:
     return bool(teacher_ids_for_query(query)) or any(m in q for m in _TEACHER_QUERY_MARKERS)
 
 
+def query_has_commercial_intent(query: str) -> bool:
+    """True when the query is about quotes, prices, or commercial terms."""
+    q = (query or "").lower()
+    return any(m in q for m in _QUOTE_QUERY_MARKERS)
+
+
+def _apply_quote_signal_boost(query: str, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Boost chunks flagged ``has_quote`` / ``has_price`` on commercial queries."""
+    if not results or not query_has_commercial_intent(query):
+        return results
+    for r in results:
+        meta = r.get("metadata") or {}
+        if not isinstance(meta, dict):
+            continue
+        if meta.get("has_quote"):
+            r["score"] = float(r.get("score", 0)) + _QUOTE_SIGNAL_BOOST
+            r["_quote_signal_boost"] = True
+        if meta.get("has_price"):
+            r["score"] = float(r.get("score", 0)) + _PRICE_SIGNAL_BOOST
+            r["_price_signal_boost"] = True
+    return results
+
+
 def _apply_trusted_source_boost(
     results: list[dict[str, Any]],
     *,
@@ -188,7 +292,7 @@ def _apply_trusted_source_boost(
     """Prefer operator-maintained Acme Corp source-of-truth over ad-hoc uploads."""
     if not results:
         return results
-    q_low = (query or "").lower()
+    (query or "").lower()
     boost_teacher = query_triggers_teacher_boost(query)
     targeted_teachers = teacher_ids_for_query(query)
     for r in results:
@@ -233,6 +337,7 @@ def _apply_keyword_boost(query: str, results: list[dict[str, Any]]) -> list[dict
         return (-(base + kw_w * kw), -kw)
 
     results.sort(key=_sort_key)
+    results = _apply_quote_signal_boost(query, results)
     results = _apply_trusted_source_boost(results, query=query)
     for r in results:
         r.pop("_keyword_score", None)
@@ -366,13 +471,22 @@ class UnifiedRetriever:
         self,
         qdrant: QdrantManager,
         graph: KnowledgeGraph,
-        mem0_client: Any | None = None,
+        long_term: Any | None = None,
         *,
+        mem0_client: Any | None = None,
         reranker_model: str = "ms-marco-MiniLM-L-12-v2",
     ) -> None:
         self._qdrant = qdrant
         self._graph = graph
-        self._mem0 = mem0_client
+        if long_term is not None:
+            self._long_term = long_term
+        elif mem0_client is not None:
+            logger.warning(
+                "UnifiedRetriever mem0_client is deprecated; pass long_term=LongTermMemory()"
+            )
+            self._long_term = None
+        else:
+            self._long_term = None
 
         settings = get_settings()
         from brain_os.systems.data_dir_lock import coerce_config_path, get_data_dir
@@ -386,7 +500,7 @@ class UnifiedRetriever:
         Path(cache_root).mkdir(parents=True, exist_ok=True)
         try:
             self._flashrank = Ranker(model_name=reranker_model, cache_dir=cache_root)
-        except (OSError, ImportError, RuntimeError, ValueError, TypeError) as exc:
+        except (OSError, ImportError, RuntimeError, ValueError, TypeError):
             logger.warning(
                 "FlashRank init failed (missing ONNX/cache or runtime error). "
                 "Voyage rerank still works when configured; otherwise retrieval uses "
@@ -411,6 +525,8 @@ class UnifiedRetriever:
         self._voyage_breaker = CircuitBreaker(threshold=8, window_seconds=180)
         #: Last :meth:`search` health for pipeline ``degradation`` trace (best-effort).
         self._last_search_health: dict[str, Any] = {}
+        self._search_entity_id: str | None = None
+        self._search_company: str | None = None
 
     def breaker_public_snapshot(self) -> dict[str, Any]:
         """Non-secret breaker state for deep-health probes."""
@@ -420,12 +536,30 @@ class UnifiedRetriever:
         }
 
     def last_retrieval_health_public(self) -> dict[str, Any]:
-        """Snapshot of the last :meth:`search` health (in-process; last call wins).
+        """Snapshot of retrieval health for the current task (ContextVar) or process fallback.
 
         Intended for ``GET /api/metrics`` and operators. Contains no secrets.
+        Concurrent searches prefer the task-local ContextVar so they do not clobber
+        each other mid-flight; the instance field remains a last-writer metrics fallback.
         """
-        h = self._last_search_health
-        return dict(h) if isinstance(h, dict) else {}
+        from brain_os.brain.retrieval_context import get_last_search_health
+
+        h = get_last_search_health()
+        if h:
+            return h
+        h2 = self._last_search_health
+        return dict(h2) if isinstance(h2, dict) else {}
+
+    def _default_fanout_sources(self, query: str) -> set[str]:
+        """Backends queried when the caller does not restrict ``sources``."""
+        use = {"qdrant", "neo4j"}
+        try:
+            scoped = bool(getattr(get_settings().app, "retriever_mem0_scoped_fanout", True))
+        except (AttributeError, TypeError):
+            scoped = True
+        if not scoped or query_is_memory_flavored(query):
+            use.add("mem0")
+        return use
 
     # ── primary search ───────────────────────────────────────────────────
 
@@ -434,16 +568,35 @@ class UnifiedRetriever:
         query: str,
         sources: list[str] | None = None,
         limit: int = 10,
+        company: str | None = None,
+        entity_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Fan-out search across Qdrant, Neo4j, and Mem0, then rerank.
 
         *sources* can restrict which backends are queried.  Valid values:
         ``"qdrant"``, ``"neo4j"``, ``"mem0"``.  ``None`` means all.
 
+        Optional *company* / *entity_id* filter Qdrant via
+        ``metadata.graph_entity_ids`` (e.g. ``Company:acme-corp``).
+
         When the primary backends return no results, the imports fallback
         retriever (Alexandros's metadata index) is consulted automatically.
+
+        Mem0 is metered per month, so the *default* fan-out (``sources=None``)
+        includes it only for memory-flavored queries (see
+        :func:`query_is_memory_flavored`). Set
+        ``APP__RETRIEVER_MEM0_SCOPED_FANOUT=false`` to restore the old
+        always-include behavior; explicit ``sources=["mem0"]`` always works.
         """
-        use = set(sources) if sources else {"qdrant", "neo4j", "mem0"}
+        use = set(sources) if sources else self._default_fanout_sources(query)
+        self._search_entity_id = (entity_id or "").strip() or None
+        self._search_company = (company or "").strip() or None
+        if self._search_company and not self._search_entity_id:
+            from brain_os.brain.knowledge_graph_text import company_name_key
+
+            key = company_name_key(self._search_company)
+            if key:
+                self._search_entity_id = f"Company:{key}"
 
         health: dict[str, Any] = {
             "backend_failures": [],
@@ -456,51 +609,155 @@ class UnifiedRetriever:
             "rerank_path": None,
             "dedup_removed": 0,
             "retrieval_profile": None,
+            "mem0_scoped_out": (
+                sources is None and self._long_term is not None and "mem0" not in use
+            ),
         }
 
         try:
-            app_cfg = get_settings().app
-            effective_query = _qr.normalize_for_retrieval(query)
-            profile = (
-                retrieval_profile_var.get() or app_cfg.retriever_default_profile or "default"
-            ).strip()
-            health["retrieval_profile"] = profile
-            local_timeouts = merge_backend_timeouts(self._backend_timeouts_seconds, profile)
+            return await self._search_inner(query, use=use, limit=limit, health=health)
+        except Exception:
+            bf = health["backend_failures"]
+            if isinstance(bf, list):
+                bf.append("search_fatal")
+            logger.exception("Retriever.search failed closed to empty results")
+            return []
+        finally:
+            from brain_os.brain.retrieval_context import set_last_search_health
 
-            emit_retrieval_trace(
-                "search_start",
-                sources=sorted(use),
-                limit=limit,
-                **_qr.summarize_for_trace(query),
+            set_last_search_health(health)
+            # Process-level fallback for metrics / post-scope readers (last writer wins).
+            self._last_search_health = health
+
+    async def _search_inner(
+        self,
+        query: str,
+        *,
+        use: set[str],
+        limit: int,
+        health: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Core fan-out search; callers wrap with fail-closed empty results."""
+        app_cfg = get_settings().app
+        effective_query = _qr.normalize_for_retrieval(query)
+        profile = (
+            retrieval_profile_var.get() or app_cfg.retriever_default_profile or "default"
+        ).strip()
+        health["retrieval_profile"] = profile
+        local_timeouts = merge_backend_timeouts(self._backend_timeouts_seconds, profile)
+
+        emit_retrieval_trace(
+            "search_start",
+            sources=sorted(use),
+            limit=limit,
+            **_qr.summarize_for_trace(query),
+        )
+
+        ov = max(1, int(app_cfg.retriever_over_retrieve_factor))
+        tasks: dict[str, asyncio.Task[Any]] = {}
+        if "qdrant" in use:
+            tasks["qdrant"] = asyncio.create_task(
+                self._search_qdrant(effective_query, limit=limit * ov)
             )
+        if "neo4j" in use:
+            tasks["neo4j"] = asyncio.create_task(self._search_graph(effective_query))
+        if "mem0" in use and self._long_term is not None:
+            tasks["mem0"] = asyncio.create_task(self._search_mem0(effective_query, limit=limit))
 
-            ov = max(1, int(app_cfg.retriever_over_retrieve_factor))
-            tasks: dict[str, asyncio.Task[Any]] = {}
-            if "qdrant" in use:
-                tasks["qdrant"] = asyncio.create_task(
-                    self._search_qdrant(effective_query, limit=limit * ov)
+        merged: list[dict[str, Any]] = []
+        for source_type, task in tasks.items():
+            try:
+                backend_timeout = local_timeouts.get(source_type, 15.0)
+                results = await asyncio.wait_for(task, timeout=backend_timeout)
+                for r in results:
+                    r["source_type"] = source_type
+                merged.extend(results)
+            except TimeoutError:
+                bf = health["backend_failures"]
+                if isinstance(bf, list):
+                    bf.append(f"{source_type}_timeout")
+                logger.warning(
+                    "Retrieval from %s timed out after %.1fs",
+                    source_type,
+                    local_timeouts.get(source_type, 15.0),
                 )
-            if "neo4j" in use:
-                tasks["neo4j"] = asyncio.create_task(self._search_graph(effective_query))
-            if "mem0" in use and self._mem0 is not None:
-                tasks["mem0"] = asyncio.create_task(self._search_mem0(effective_query, limit=limit))
+            except _BACKEND_SOFT_ERRORS:
+                bf = health["backend_failures"]
+                if isinstance(bf, list):
+                    bf.append(f"{source_type}_error")
+                logger.exception("Retrieval from %s failed", source_type)
 
-            merged: list[dict[str, Any]] = []
-            for source_type, task in tasks.items():
+        emit_retrieval_trace("backend_fanout_done", n_raw=len(merged))
+
+        if not merged:
+            try:
+                from brain_os.brain.knowledge_discovery import KnowledgeDiscovery
+
+                discovery = KnowledgeDiscovery(
+                    retriever=self,
+                    qdrant_manager=self._qdrant,
+                    embedding_service=self._qdrant._embeddings,
+                )
+                discovered = await discovery.discover_and_store(effective_query, [])
+                if discovered:
+                    health["used_discovery"] = True
+                    for d in discovered:
+                        d["source_type"] = "discovery"
+                    merged.extend(discovered)
+            except (
+                TimeoutError,
+                BrainOSError,
+                DatabaseError,
+                httpx.HTTPError,
+                OSError,
+                ValueError,
+                TypeError,
+                AttributeError,
+                KeyError,
+            ):
+                logger.warning("Knowledge discovery fallback failed", exc_info=True)
+
+        if not merged:
+            health["imports_fallback"] = True
+            return await self._imports_fallback(effective_query, limit)
+
+        merged = await self._stitch_graph_to_vectors(merged)
+        merged = _apply_keyword_boost(effective_query, merged)
+
+        sample_cap = min(len(merged), max(limit * 3, 12))
+        sample = merged[:sample_cap] if merged else []
+        kw_pre = keyword_overlap_score(effective_query, sample) if sample else 1.0
+        health["keyword_overlap_prerank"] = round(float(kw_pre), 4)
+        thr = float(getattr(app_cfg, "retriever_second_pass_keyword_threshold", 0.22))
+        weak = bool(sample) and kw_pre < thr
+        health["weak_evidence"] = weak
+
+        if (
+            weak
+            and bool(getattr(app_cfg, "retriever_second_pass_enabled", False))
+            and "qdrant" in use
+        ):
+            alt_q = await self._second_pass_decomposed_query(effective_query)
+            if alt_q:
                 try:
-                    backend_timeout = local_timeouts.get(source_type, 15.0)
-                    results = await asyncio.wait_for(task, timeout=backend_timeout)
-                    for r in results:
-                        r["source_type"] = source_type
-                    merged.extend(results)
+                    extra = await asyncio.wait_for(
+                        self._search_qdrant(alt_q, limit=limit * ov),
+                        timeout=local_timeouts.get("qdrant", 35.0),
+                    )
+                    for r in extra:
+                        r["source_type"] = "qdrant"
+                    merged.extend(extra)
+                    merged = await self._stitch_graph_to_vectors(merged)
+                    merged = _apply_keyword_boost(effective_query, merged)
+                    health["second_pass_used"] = True
+                    health["second_pass_query"] = alt_q[:500]
                 except TimeoutError:
                     bf = health["backend_failures"]
                     if isinstance(bf, list):
-                        bf.append(f"{source_type}_timeout")
+                        bf.append("second_pass_qdrant_timeout")
                     logger.warning(
-                        "Retrieval from %s timed out after %.1fs",
-                        source_type,
-                        local_timeouts.get(source_type, 15.0),
+                        "Retriever second-pass Qdrant timed out after %.1fs",
+                        local_timeouts.get("qdrant", 35.0),
                     )
                 except (
                     DatabaseError,
@@ -510,114 +767,25 @@ class UnifiedRetriever:
                     TypeError,
                     AttributeError,
                     KeyError,
-                    RuntimeError,
                 ):
                     bf = health["backend_failures"]
                     if isinstance(bf, list):
-                        bf.append(f"{source_type}_error")
-                    logger.exception("Retrieval from %s failed", source_type)
+                        bf.append("second_pass_qdrant_error")
+                    logger.warning("Retriever second-pass Qdrant failed", exc_info=True)
 
-            emit_retrieval_trace("backend_fanout_done", n_raw=len(merged))
+        dedup_rm = 0
+        if app_cfg.retriever_dedup_enabled and merged:
+            merged, dedup_rm = _dedup_near_duplicate_passages(
+                merged,
+                max_jaccard=float(app_cfg.retriever_dedup_max_jaccard),
+                content_chars=int(app_cfg.retriever_dedup_content_chars),
+            )
+        health["dedup_removed"] = dedup_rm
 
-            if not merged:
-                try:
-                    from brain_os.brain.knowledge_discovery import KnowledgeDiscovery
+        emit_retrieval_trace("pre_rerank", n_hits=len(merged), dedup_removed=dedup_rm)
 
-                    discovery = KnowledgeDiscovery(
-                        retriever=self,
-                        qdrant_manager=self._qdrant,
-                        embedding_service=self._qdrant._embeddings,
-                    )
-                    discovered = await discovery.discover_and_store(effective_query, [])
-                    if discovered:
-                        health["used_discovery"] = True
-                        for d in discovered:
-                            d["source_type"] = "discovery"
-                        merged.extend(discovered)
-                except (
-                    TimeoutError,
-                    BrainOSError,
-                    DatabaseError,
-                    httpx.HTTPError,
-                    OSError,
-                    ValueError,
-                    TypeError,
-                    AttributeError,
-                    KeyError,
-                ):
-                    logger.warning("Knowledge discovery fallback failed", exc_info=True)
-
-            if not merged:
-                health["imports_fallback"] = True
-                return await self._imports_fallback(effective_query, limit)
-
-            merged = await self._stitch_graph_to_vectors(merged)
-            merged = _apply_keyword_boost(effective_query, merged)
-
-            sample_cap = min(len(merged), max(limit * 3, 12))
-            sample = merged[:sample_cap] if merged else []
-            kw_pre = keyword_overlap_score(effective_query, sample) if sample else 1.0
-            health["keyword_overlap_prerank"] = round(float(kw_pre), 4)
-            thr = float(getattr(app_cfg, "retriever_second_pass_keyword_threshold", 0.22))
-            weak = bool(sample) and kw_pre < thr
-            health["weak_evidence"] = weak
-
-            if (
-                weak
-                and bool(getattr(app_cfg, "retriever_second_pass_enabled", False))
-                and "qdrant" in use
-            ):
-                alt_q = await self._second_pass_decomposed_query(effective_query)
-                if alt_q:
-                    try:
-                        extra = await asyncio.wait_for(
-                            self._search_qdrant(alt_q, limit=limit * ov),
-                            timeout=local_timeouts.get("qdrant", 35.0),
-                        )
-                        for r in extra:
-                            r["source_type"] = "qdrant"
-                        merged.extend(extra)
-                        merged = await self._stitch_graph_to_vectors(merged)
-                        merged = _apply_keyword_boost(effective_query, merged)
-                        health["second_pass_used"] = True
-                        health["second_pass_query"] = alt_q[:500]
-                    except TimeoutError:
-                        bf = health["backend_failures"]
-                        if isinstance(bf, list):
-                            bf.append("second_pass_qdrant_timeout")
-                        logger.warning(
-                            "Retriever second-pass Qdrant timed out after %.1fs",
-                            local_timeouts.get("qdrant", 35.0),
-                        )
-                    except (
-                        DatabaseError,
-                        httpx.HTTPError,
-                        OSError,
-                        ValueError,
-                        TypeError,
-                        AttributeError,
-                        KeyError,
-                    ):
-                        bf = health["backend_failures"]
-                        if isinstance(bf, list):
-                            bf.append("second_pass_qdrant_error")
-                        logger.warning("Retriever second-pass Qdrant failed", exc_info=True)
-
-            dedup_rm = 0
-            if app_cfg.retriever_dedup_enabled and merged:
-                merged, dedup_rm = _dedup_near_duplicate_passages(
-                    merged,
-                    max_jaccard=float(app_cfg.retriever_dedup_max_jaccard),
-                    content_chars=int(app_cfg.retriever_dedup_content_chars),
-                )
-            health["dedup_removed"] = dedup_rm
-
-            emit_retrieval_trace("pre_rerank", n_hits=len(merged), dedup_removed=dedup_rm)
-
-            await self._log_retrieval(effective_query, merged)
-            return await self._rerank(effective_query, merged, limit, health=health)
-        finally:
-            self._last_search_health = health
+        await self._log_retrieval(effective_query, merged)
+        return await self._rerank(effective_query, merged, limit, health=health)
 
     # ── graph-vector stitching ───────────────────────────────────────────
 
@@ -641,6 +809,8 @@ class UnifiedRetriever:
         if not graph_items:
             return merged_results
 
+        stitch_attempted = 0
+        stitch_misses = 0
         existing_contents: set[str] = {r.get("content", "")[:200] for r in merged_results}
 
         identifiers: set[str] = set()
@@ -653,7 +823,17 @@ class UnifiedRetriever:
                 if val:
                     identifiers.add(val)
 
-        stitch_tasks = [self._qdrant.hybrid_search(eid, limit=3) for eid in list(identifiers)[:10]]
+        id_list = list(identifiers)[:10]
+        stitch_attempted += len(id_list)
+        stitch_tasks = [
+            self._qdrant.hybrid_search(
+                eid,
+                limit=3,
+                entity_id=self._search_entity_id,
+                company=self._search_company,
+            )
+            for eid in id_list
+        ]
 
         # Denser stitch: (entity_label, entity_key) → Chunk point IDs → get_points
         entity_refs: list[tuple[str, str]] = []
@@ -671,9 +851,13 @@ class UnifiedRetriever:
         unique_refs = [x for x in entity_refs if (x not in seen_ref and not seen_ref.add(x))]
         point_ids: set[str] = set()
         for label, key in unique_refs[:15]:
+            stitch_attempted += 1
             try:
                 ids = await self._graph.get_chunk_point_ids_for_entity(label, key, limit=5)
-                point_ids.update(ids)
+                if ids:
+                    point_ids.update(ids)
+                else:
+                    stitch_misses += 1
             except (
                 TimeoutError,
                 DatabaseError,
@@ -683,7 +867,8 @@ class UnifiedRetriever:
                 TypeError,
                 AttributeError,
                 KeyError,
-            ) as exc:
+            ):
+                stitch_misses += 1
                 logger.debug(
                     "get_chunk_point_ids_for_entity failed for %s:%s",
                     label,
@@ -691,6 +876,7 @@ class UnifiedRetriever:
                     exc_info=True,
                 )
         if point_ids:
+            stitch_attempted += 1
             stitch_tasks.append(self._qdrant.get_points(list(point_ids)))
 
         all_results = await asyncio.gather(*stitch_tasks, return_exceptions=True)
@@ -698,7 +884,11 @@ class UnifiedRetriever:
         new_chunks: list[dict[str, Any]] = []
         for result_set in all_results:
             if isinstance(result_set, BaseException):
+                stitch_misses += 1
                 logger.debug("Graph-vector stitch search failed: %s", result_set)
+                continue
+            if not result_set:
+                stitch_misses += 1
                 continue
             for r in result_set:
                 content_key = r.get("content", "")[:200]
@@ -707,12 +897,32 @@ class UnifiedRetriever:
                     r["source_type"] = "qdrant_stitched"
                     new_chunks.append(r)
 
-        if new_chunks:
+        stitch_resolved = len(new_chunks)
+        if stitch_misses:
+            logger.warning(
+                "Graph-vector stitch misses: %d/%d attempted (added %d chunks)",
+                stitch_misses,
+                stitch_attempted,
+                stitch_resolved,
+            )
+        elif new_chunks:
             logger.info(
                 "Graph-vector stitch added %d Qdrant chunks (identifiers + Chunk links)",
-                len(new_chunks),
+                stitch_resolved,
             )
-            merged_results.extend(new_chunks)
+
+        if stitch_attempted:
+            merged_results.append(
+                {
+                    "_stitch_stats": True,
+                    "stitch_attempted": stitch_attempted,
+                    "stitch_resolved": stitch_resolved,
+                    "stitch_misses": stitch_misses,
+                    "stitch_miss_rate": round(stitch_misses / stitch_attempted, 4),
+                }
+            )
+
+        merged_results.extend(new_chunks)
 
         return merged_results
 
@@ -771,7 +981,12 @@ class UnifiedRetriever:
     # ── backend-specific search helpers ──────────────────────────────────
 
     async def _search_qdrant(self, query: str, limit: int) -> list[dict[str, Any]]:
-        return await self._qdrant.hybrid_search(query, limit=limit)
+        return await self._qdrant.hybrid_search(
+            query,
+            limit=limit,
+            entity_id=self._search_entity_id,
+            company=self._search_company,
+        )
 
     async def _search_graph(self, query: str) -> list[dict[str, Any]]:
         """Extract entities from the query via LLM, then look each up in Neo4j.
@@ -804,6 +1019,7 @@ class UnifiedRetriever:
                         continue
                 except (
                     TimeoutError,
+                    Neo4jError,
                     DatabaseError,
                     httpx.HTTPError,
                     OSError,
@@ -818,7 +1034,15 @@ class UnifiedRetriever:
                         exc_info=True,
                     )
 
-            subgraph = await self._graph.find_related_entities(name, max_hops=2)
+            try:
+                subgraph = await self._graph.find_related_entities(name, max_hops=2)
+            except Neo4jError:
+                logger.debug(
+                    "Neo4j find_related_entities failed for %s",
+                    name[:80],
+                    exc_info=True,
+                )
+                continue
             nodes = subgraph.get("nodes", [])
             relationships = subgraph.get("relationships", [])
 
@@ -885,6 +1109,7 @@ class UnifiedRetriever:
                 query,
                 EntityNames,
                 name="retriever.extract_entities",
+                model_tier="cheap",
             )
             return result.entities
         except (
@@ -895,14 +1120,14 @@ class UnifiedRetriever:
             TypeError,
             AttributeError,
             KeyError,
-        ) as exc:
+        ):
             logger.warning(
                 "Entity name extraction failed for graph search; using raw query", exc_info=True
             )
         return []
 
     async def _search_mem0(self, query: str, limit: int) -> list[dict[str, Any]]:
-        if self._mem0 is None:
+        if self._long_term is None:
             return []
         try:
             mem0_timeout = getattr(self, "_mem0_timeout_seconds", 15.0)
@@ -914,31 +1139,47 @@ class UnifiedRetriever:
             mem0_breaker = getattr(self, "_mem0_breaker", None)
 
             from brain_os.brain.retrieval_context import mem0_user_id_var
+            from brain_os.memory.mem0_access_tracker import get_mem0_access_tracker
+            from brain_os.memory.mem0_search_cache import get_mem0_search_cache
 
             _uid = mem0_user_id_var.get()
 
+            cache = get_mem0_search_cache()
+            cached = await cache.get("retriever", query, _uid, limit)
+            if cached is not None:
+                await get_mem0_access_tracker().record_hits(
+                    [r.get("metadata", {}).get("mem0_id", "") for r in cached], _uid
+                )
+                return cached
+
             async def _operation() -> Any:
                 return await asyncio.wait_for(
-                    asyncio.to_thread(lambda: self._mem0.search(query, user_id=_uid, top_k=limit)),
+                    self._long_term.search(query, user_id=_uid, limit=limit),
                     timeout=mem0_timeout,
                 )
 
-            raw = await run_with_retry(
+            memories = await run_with_retry(
                 _operation,
                 policy=external_retry,
                 is_retryable=_is_retryable_external_error,
                 circuit_breaker=mem0_breaker,
             )
-            memories = raw.get("results", raw) if isinstance(raw, dict) else raw
-            return [
+            results = [
                 {
                     "content": m.get("memory", m.get("text", "")),
                     "score": m.get("score", 0.5),
                     "source": "mem0",
-                    "metadata": m.get("metadata", {}),
+                    # mem0_id rides along so access tracking survives caching
+                    # and downstream merges that only keep metadata.
+                    "metadata": {**(m.get("metadata", {}) or {}), "mem0_id": str(m.get("id", ""))},
                 }
                 for m in (memories if isinstance(memories, list) else [])
             ]
+            await cache.put("retriever", query, _uid, limit, results)
+            await get_mem0_access_tracker().record_hits(
+                [r["metadata"].get("mem0_id", "") for r in results], _uid
+            )
+            return results
         except (
             TimeoutError,
             DatabaseError,
@@ -959,9 +1200,25 @@ class UnifiedRetriever:
             from brain_os.brain.graph_consolidation import GraphConsolidation
 
             gc = GraphConsolidation(knowledge_graph=self._graph)
-            source_ids = [r.get("source", r.get("id", ""))[:200] for r in results[:10]]
-            source_types = [r.get("source_type", "") for r in results[:10]]
-            await gc.log_retrieval(query, source_ids, source_types)
+            stitch_stats: dict[str, Any] | None = None
+            log_results = results
+            for r in results:
+                if r.get("_stitch_stats"):
+                    stitch_stats = {
+                        k: r[k]
+                        for k in (
+                            "stitch_attempted",
+                            "stitch_resolved",
+                            "stitch_misses",
+                            "stitch_miss_rate",
+                        )
+                        if k in r
+                    }
+                    log_results = [x for x in results if not x.get("_stitch_stats")]
+                    break
+            source_ids = [r.get("source", r.get("id", ""))[:200] for r in log_results[:10]]
+            source_types = [r.get("source_type", "") for r in log_results[:10]]
+            await gc.log_retrieval(query, source_ids, source_types, stitch_stats=stitch_stats)
         except (
             TimeoutError,
             DatabaseError,
@@ -997,6 +1254,7 @@ class UnifiedRetriever:
             ]
         except (
             IngestionError,
+            BrainOSError,
             OSError,
             httpx.HTTPError,
             ValueError,
@@ -1137,6 +1395,7 @@ class UnifiedRetriever:
             )
 
         output = _diversify_results(output, limit)
+        output = await self._apply_access_frequency_boost(output)
         return await self._apply_learned_corrections(output)
 
     async def _flashrank_rerank(
@@ -1149,7 +1408,8 @@ class UnifiedRetriever:
         if self._flashrank is None:
             logger.info("FlashRank unavailable — returning top results by retrieval score")
             ranked = sorted(results, key=lambda r: float(r.get("score", 0)), reverse=True)
-            return await self._apply_learned_corrections(ranked[:limit])
+            ranked = await self._apply_access_frequency_boost(ranked[:limit])
+            return await self._apply_learned_corrections(ranked)
 
         passages = [
             {"id": i, "text": r.get("content", ""), "meta": r} for i, r in enumerate(results)
@@ -1176,7 +1436,8 @@ class UnifiedRetriever:
         ):
             logger.exception("FlashRank reranking failed; returning by original score")
             results.sort(key=lambda r: r.get("score", 0), reverse=True)
-            return await self._apply_learned_corrections(results[:limit])
+            ranked = await self._apply_access_frequency_boost(results[:limit])
+            return await self._apply_learned_corrections(ranked)
 
         _rrf = max(1, int(get_settings().app.retriever_rerank_candidates_factor))
         take = min(limit * _rrf, len(reranked))
@@ -1199,7 +1460,47 @@ class UnifiedRetriever:
             )
 
         output = _diversify_results(output, limit)
+        output = await self._apply_access_frequency_boost(output)
         return await self._apply_learned_corrections(output)
+
+    async def _apply_access_frequency_boost(
+        self, results: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Blend Mem0 access-tracker usage prior into post-rerank scores (bounded)."""
+        if not results:
+            return results
+        try:
+            app = get_settings().app
+            if not bool(getattr(app, "retriever_access_boost_enabled", True)):
+                return results
+            from brain_os.brain.retrieval_access_boost import (
+                apply_access_frequency_boost,
+                result_access_key,
+            )
+            from brain_os.memory.mem0_access_tracker import get_mem0_access_tracker
+
+            keys = [result_access_key(r) for r in results]
+            stats = await get_mem0_access_tracker().get_access_stats(keys)
+            if not stats:
+                return results
+            return apply_access_frequency_boost(
+                results,
+                stats,
+                weight=float(getattr(app, "retriever_access_boost_weight", 1.0)),
+                max_influence=float(getattr(app, "retriever_access_boost_max_influence", 0.12)),
+                half_life_days=float(getattr(app, "retriever_access_boost_half_life_days", 30.0)),
+            )
+        except (
+            TimeoutError,
+            OSError,
+            RuntimeError,
+            ValueError,
+            TypeError,
+            AttributeError,
+            KeyError,
+        ):
+            logger.debug("access-frequency boost skipped", exc_info=True)
+            return results
 
     # ── learned corrections ────────────────────────────────────────────────
 
@@ -1278,6 +1579,7 @@ class UnifiedRetriever:
                 query,
                 SubQueries,
                 name="retriever.decompose",
+                model_tier="cheap",
             )
             if result.queries:
                 logger.info("Decomposed query into %d sub-queries", len(result.queries))
@@ -1290,7 +1592,7 @@ class UnifiedRetriever:
             TypeError,
             AttributeError,
             KeyError,
-        ) as exc:
+        ):
             logger.exception("Query decomposition failed")
         return []
 

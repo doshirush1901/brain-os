@@ -139,12 +139,26 @@ class Graphe(BaseAgent):
         sources: str = "",
         email_threads: str = "",
     ) -> str:
+        agent_list = [a.strip() for a in agents_used.split(",") if a.strip()]
+        from brain_os.brain.learning_telemetry import build_learning_meta
+
+        learning_meta = build_learning_meta(
+            metis_result=None,
+            pipeline_ms=0.0,
+            email_scope="no_email",
+            agents_used=agent_list,
+            raw_response=response_summary,
+            had_provenance_warning=False,
+            had_dlp_flag=False,
+            route_method="graphe_tool",
+        )
         await self.log_turn(
             query=query,
-            agents_used=[a.strip() for a in agents_used.split(",") if a.strip()],
+            agents_used=agent_list,
             response_summary=response_summary,
             sources=[s.strip() for s in sources.split(",") if s.strip()],
             email_threads=[t.strip() for t in email_threads.split(",") if t.strip()],
+            learning_meta=learning_meta,
         )
         return "Session logged."
 

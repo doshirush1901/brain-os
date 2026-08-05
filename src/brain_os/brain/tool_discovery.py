@@ -86,6 +86,7 @@ DEFAULT_MCP_TOOL_CANDIDATES: tuple[str, ...] = (
     "quote_competitiveness_check",
     "buying_committee_map",
     "stalled_deal_revival_playbook",
+    "discovery_hygiene",
 )
 
 
@@ -159,6 +160,9 @@ def rank_mcp_tools(query: str, tool_names: Iterable[str]) -> list[str]:
         "stage gate": ("stage_exit_criteria_check", "deal_risk_audit", "update_deal"),
         "move stage": ("stage_exit_criteria_check", "deal_risk_audit", "get_deal"),
         "stalled deal": ("stalled_deal_revival_playbook", "deal_risk_audit", "get_stale_leads"),
+        "discovery call": ("discovery_hygiene", "deal_risk_audit", "get_account_brief"),
+        "thinking about it": ("discovery_hygiene", "stalled_deal_revival_playbook", "draft_email"),
+        "reality gap": ("discovery_hygiene", "get_account_brief", "query_brain"),
         "revival playbook": ("stalled_deal_revival_playbook", "deal_risk_audit"),
         "re-engage": ("stalled_deal_revival_playbook", "persuasion_sprint", "get_account_brief"),
         "buying committee": ("buying_committee_map", "find_company_contacts", "get_account_brief"),
@@ -190,6 +194,14 @@ def rank_mcp_tools(query: str, tool_names: Iterable[str]) -> list[str]:
         "contact": ("search_crm", "create_contact", "find_company_contacts", "query_brain"),
         "company": ("search_crm", "find_company_contacts", "find_company_quotes", "query_brain"),
         "apollo": ("sync_crm_apollo", "enrich_contact_apollo", "search_people_apollo", "query_brain"),
+        "people data labs": ("enrich_contact_pdl", "verify_employment_pdl", "query_brain"),
+        "pdl": ("enrich_contact_pdl", "verify_employment_pdl", "query_brain"),
+        "employment": (
+            "verify_employment_pdl",
+            "enrich_contact_pdl",
+            "enrich_contact_apollo",
+            "query_brain",
+        ),
         "enrich crm": ("sync_crm_apollo", "query_brain"),
         "prospect": ("search_people_apollo", "search_crm", "query_brain"),
         "quote": ("find_company_quotes", "get_deal", "list_deals", "query_brain"),

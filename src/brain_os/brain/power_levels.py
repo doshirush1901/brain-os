@@ -59,7 +59,7 @@ def _default_pantheon_agent_names() -> set[str]:
         from brain_os.pantheon import _AGENT_CLASSES
 
         return {str(cls.name).lower() for cls in _AGENT_CLASSES if getattr(cls, "name", None)}
-    except (ImportError, AttributeError, TypeError) as exc:
+    except (ImportError, AttributeError, TypeError):
         logger.debug("Could not load pantheon registry for power levels", exc_info=True)
         return set()
 

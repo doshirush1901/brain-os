@@ -256,9 +256,8 @@ class Artemis(BaseAgent):
             AgentTool(
                 name="pull_email_data_skill",
                 description=(
-                    "Data pulling from email past conversations: run pull_contact_email_history "
-                    "and download_email_attachments for a contact. Use when asked to pull all "
-                    "context from email for a lead (threads, logic tree, PDFs, quote data)."
+                    "Data pulling from email past conversations: pull Gmail threads, "
+                    "logic-tree recap, PDFs, and optional quote extraction for a contact."
                 ),
                 parameters={
                     "email": "Contact email address",
@@ -559,12 +558,14 @@ class Artemis(BaseAgent):
 
     async def _tool_ask_delphi(self, email_body: str, subject: str = "") -> str:
         """Delegate to Delphi for deep email classification."""
+        from brain_os.brain.untrusted_input import fence_untrusted
+
         return await self._tool_ask_agent(
             "delphi",
             (
                 "Classify this email thread content with task=classify_email.\n"
                 f"Subject: {subject}\n\n"
-                f"Body:\n{email_body[:2000]}"
+                f"Body:\n{fence_untrusted(email_body[:2000], source='email', max_chars=2000)}"
             ),
         )
 

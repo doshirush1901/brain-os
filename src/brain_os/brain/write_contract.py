@@ -41,7 +41,7 @@ recent_receipts = _wr.recent_receipts
 summarize_recent = _wr.summarize_recent
 append_dead_letter = _wr.append_dead_letter
 
-# Tests patch ``brain_os.brain.write_contract.get_data_dir``.
+# Receipt paths: ``brain_os.contracts.write_receipt.get_data_dir`` (tests patch that symbol).
 
 
 async def _replay_qdrant_pipeline_turn_summary(row: dict[str, Any]) -> bool:
@@ -82,13 +82,13 @@ async def _replay_qdrant_pipeline_turn_summary(row: dict[str, Any]) -> bool:
     try:
         n = await qm.upsert_items([item])
         return int(n or 0) > 0
-    except (DatabaseError, BrainOSError, httpx.HTTPError, OSError, ValueError, TypeError) as exc:
+    except (DatabaseError, BrainOSError, httpx.HTTPError, OSError, ValueError, TypeError):
         logger.warning("Replay Qdrant pipeline.turn_summary failed", exc_info=True)
         return False
     finally:
         try:
             await qm.close()
-        except (OSError, RuntimeError) as exc:
+        except (OSError, RuntimeError):
             logger.debug("QdrantManager close failed after replay", exc_info=True)
 
 
@@ -126,13 +126,13 @@ async def _replay_neo_pipeline_turn_relationship(row: dict[str, Any]) -> bool:
             source_id=f"write_contract::{rid}",
         )
         return bool(ok)
-    except DatabaseError as exc:
+    except DatabaseError:
         logger.warning("Replay Neo4j pipeline.turn_relationship failed", exc_info=True)
         return False
     finally:
         try:
             await graph.close()
-        except (OSError, RuntimeError) as exc:
+        except (OSError, RuntimeError):
             logger.debug("KnowledgeGraph close failed after replay", exc_info=True)
 
 

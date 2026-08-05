@@ -34,7 +34,22 @@ class EntityExtractionConfig:
     """Provider settings for unstructured-text entity extraction."""
 
     entity_fallback_provider: str
+    digestive_openai_model: str = ""
     digestive_anthropic_model: str = ""
+
+
+def resolve_digestive_openai_model(
+    *,
+    digestive_openai_model: str = "",
+    default_model: str | None = None,
+) -> str:
+    """OpenAI model for graph entity extraction (ingest + backfill), not Pantheon chat."""
+    explicit = (digestive_openai_model or "").strip()
+    if explicit:
+        return explicit
+    if default_model and default_model.strip():
+        return default_model.strip()
+    return get_settings().llm.openai_model
 
 
 @observe()
@@ -56,7 +71,12 @@ async def extract_entities_from_text(
     """
     if config.entity_fallback_provider == "openai":
         try:
-            return await extract_entities_graphrag(text)
+            return await extract_entities_graphrag(
+                text,
+                openai_model=resolve_digestive_openai_model(
+                    digestive_openai_model=config.digestive_openai_model,
+                ),
+            )
         except (
             TimeoutError,
             ImportError,
@@ -67,12 +87,16 @@ async def extract_entities_from_text(
             TypeError,
             AttributeError,
             KeyError,
-        ) as exc:
+        ):
             logger.debug("GraphRAG extraction unavailable, using legacy LLM", exc_info=True)
 
     try:
         model_kw: dict[str, str] = {}
-        if config.entity_fallback_provider == "anthropic" and config.digestive_anthropic_model:
+        if config.entity_fallback_provider == "openai" and config.digestive_openai_model:
+            model_kw["model"] = resolve_digestive_openai_model(
+                digestive_openai_model=config.digestive_openai_model,
+            )
+        elif config.entity_fallback_provider == "anthropic" and config.digestive_anthropic_model:
             model_kw["model"] = config.digestive_anthropic_model
         result = await llm.generate_structured(
             EXTRACTION_SYSTEM_PROMPT,
@@ -83,21 +107,21 @@ async def extract_entities_from_text(
             **model_kw,
         )
         return result.model_dump()
-    except (
-        TimeoutError,
-        LLMError,
-        httpx.HTTPError,
-        json.JSONDecodeError,
-        ValueError,
-        TypeError,
-        AttributeError,
-        KeyError,
-    ):
-        logger.exception("Entity extraction failed for source text (%d chars)", len(text))
+    except Exception:
+        # Instructor/Ollama can raise AssertionError or tenacity.RetryError — degrade to empty.
+        logger.warning(
+            "Entity extraction failed for source text (%d chars); returning empty entities",
+            len(text),
+            exc_info=True,
+        )
         return dict(_EMPTY_EXTRACTION)
 
 
-async def extract_entities_graphrag(text: str) -> dict[str, Any]:
+async def extract_entities_graphrag(
+    text: str,
+    *,
+    openai_model: str | None = None,
+) -> dict[str, Any]:
     """Schema-bound entity extraction using neo4j-graphrag."""
     from neo4j_graphrag.experimental.components.entity_relation_extractor import (
         LLMEntityRelationExtractor,
@@ -175,8 +199,9 @@ async def extract_entities_graphrag(text: str) -> dict[str, Any]:
 
     cfg = get_settings()
     openai_key = cfg.llm.openai_api_key.get_secret_value()
+    model_name = (openai_model or "").strip() or cfg.llm.openai_model
     llm = OpenAILLM(
-        model_name=cfg.llm.openai_model,
+        model_name=model_name,
         api_key=openai_key,
     )
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from abc import ABC, abstractmethod
 from datetime import date, datetime
 from pathlib import Path
@@ -159,7 +160,7 @@ class SqliteAgentJournalBackend(AgentJournalBackend):
                 (agent_name, d.isoformat(), action_text, outcome, now),
             )
             await self._db.commit()
-        except Exception as exc:
+        except (sqlite3.Error, RuntimeError, ValueError, TypeError, IndexError):
             logger.warning("AgentJournal.log_action failed for %s", agent_name, exc_info=True)
 
     async def get_actions_for_date(self, agent_name: str, d: date) -> list[dict[str, Any]]:
@@ -178,7 +179,7 @@ class SqliteAgentJournalBackend(AgentJournalBackend):
             rows = await cursor.fetchall()
             await cursor.close()
             return [{"action_text": r[0], "outcome": r[1], "created_at": r[2]} for r in rows]
-        except Exception as exc:
+        except (sqlite3.Error, RuntimeError, ValueError, TypeError, IndexError):
             logger.warning("AgentJournal.get_actions_for_date failed", exc_info=True)
             return []
 
@@ -193,7 +194,7 @@ class SqliteAgentJournalBackend(AgentJournalBackend):
             rows = await cursor.fetchall()
             await cursor.close()
             return [r[0] for r in rows]
-        except Exception as exc:
+        except (sqlite3.Error, RuntimeError, ValueError, TypeError, IndexError):
             logger.warning("AgentJournal.get_agents_with_actions_for_date failed", exc_info=True)
             return []
 
@@ -209,7 +210,7 @@ class SqliteAgentJournalBackend(AgentJournalBackend):
             rows = await cursor.fetchall()
             await cursor.close()
             return [r[0] for r in rows]
-        except Exception as exc:
+        except (sqlite3.Error, RuntimeError, ValueError, TypeError, IndexError):
             logger.warning("AgentJournal.get_agents_with_actions_since_hours failed", exc_info=True)
             return []
 
@@ -232,7 +233,7 @@ class SqliteAgentJournalBackend(AgentJournalBackend):
             rows = await cursor.fetchall()
             await cursor.close()
             return [{"action_text": r[0], "outcome": r[1], "created_at": r[2]} for r in rows]
-        except Exception as exc:
+        except (sqlite3.Error, RuntimeError, ValueError, TypeError, IndexError):
             logger.warning("AgentJournal.get_actions_since_hours failed", exc_info=True)
             return []
 
@@ -257,7 +258,7 @@ class SqliteAgentJournalBackend(AgentJournalBackend):
                 (agent_name, d.isoformat(), reflection_text, mood, now),
             )
             await self._db.commit()
-        except Exception as exc:
+        except (sqlite3.Error, RuntimeError, ValueError, TypeError, IndexError):
             logger.warning(
                 "AgentJournal.save_journal_entry failed for %s", agent_name, exc_info=True
             )
@@ -299,7 +300,7 @@ class SqliteAgentJournalBackend(AgentJournalBackend):
                 {"date": r[0], "reflection_text": r[1], "mood": r[2], "created_at": r[3]}
                 for r in rows
             ]
-        except Exception as exc:
+        except (sqlite3.Error, RuntimeError, ValueError, TypeError, IndexError):
             logger.warning("AgentJournal.search_past_journals failed", exc_info=True)
             return []
 
@@ -320,7 +321,7 @@ class SqliteAgentJournalBackend(AgentJournalBackend):
             row = await cursor.fetchone()
             await cursor.close()
             return row[0] if row else None
-        except Exception as exc:
+        except (sqlite3.Error, RuntimeError, ValueError, TypeError, IndexError):
             logger.warning("AgentJournal.get_latest_journal_entry failed", exc_info=True)
             return None
 
@@ -346,7 +347,7 @@ class SqliteAgentJournalBackend(AgentJournalBackend):
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=_clock.UTC)
             return dt
-        except Exception as exc:
+        except (sqlite3.Error, RuntimeError, ValueError, TypeError, IndexError):
             logger.warning("AgentJournal.get_latest_journal_created_at failed", exc_info=True)
             return None
 
@@ -369,7 +370,7 @@ class SqliteAgentJournalBackend(AgentJournalBackend):
             rows = await cursor.fetchall()
             await cursor.close()
             return [{"action_text": r[0], "outcome": r[1], "created_at": r[2]} for r in rows]
-        except Exception as exc:
+        except (sqlite3.Error, RuntimeError, ValueError, TypeError, IndexError):
             logger.warning("AgentJournal.get_actions_since_datetime failed", exc_info=True)
             return []
 
@@ -403,27 +404,27 @@ class PgAgentJournalBackend(AgentJournalBackend):
     ) -> None:
         try:
             await self._repo.log_action(agent_name, action_text, outcome, at_date=at_date)
-        except Exception as exc:
+        except Exception:  # noqa: BLE001 — Postgres repo/driver errors degrade to an empty journal write
             logger.warning("AgentJournal.log_action failed for %s", agent_name, exc_info=True)
 
     async def get_actions_for_date(self, agent_name: str, d: date) -> list[dict[str, Any]]:
         try:
             return await self._repo.get_actions_for_date(agent_name, d)
-        except Exception as exc:
+        except Exception:  # noqa: BLE001 — Postgres repo/driver errors degrade to empty journal reads
             logger.warning("AgentJournal.get_actions_for_date failed", exc_info=True)
             return []
 
     async def get_agents_with_actions_for_date(self, d: date) -> list[str]:
         try:
             return await self._repo.get_agents_with_actions_for_date(d)
-        except Exception as exc:
+        except Exception:  # noqa: BLE001 — Postgres repo/driver errors degrade to empty journal reads
             logger.warning("AgentJournal.get_agents_with_actions_for_date failed", exc_info=True)
             return []
 
     async def get_agents_with_actions_since_hours(self, hours: float = 24.0) -> list[str]:
         try:
             return await self._repo.get_agents_with_actions_since_hours(hours=hours)
-        except Exception as exc:
+        except Exception:  # noqa: BLE001 — Postgres repo/driver errors degrade to empty journal reads
             logger.warning("AgentJournal.get_agents_with_actions_since_hours failed", exc_info=True)
             return []
 
@@ -432,7 +433,7 @@ class PgAgentJournalBackend(AgentJournalBackend):
     ) -> list[dict[str, Any]]:
         try:
             return await self._repo.get_actions_since_hours(agent_name, hours=hours)
-        except Exception as exc:
+        except Exception:  # noqa: BLE001 — Postgres repo/driver errors degrade to empty journal reads
             logger.warning("AgentJournal.get_actions_since_hours failed", exc_info=True)
             return []
 
@@ -446,7 +447,7 @@ class PgAgentJournalBackend(AgentJournalBackend):
     ) -> None:
         try:
             await self._repo.save_journal_entry(agent_name, reflection_text, mood, at_date=at_date)
-        except Exception as exc:
+        except Exception:  # noqa: BLE001 — Postgres repo/driver errors must not lose the reflection
             logger.warning(
                 "AgentJournal.save_journal_entry failed for %s", agent_name, exc_info=True
             )
@@ -459,21 +460,21 @@ class PgAgentJournalBackend(AgentJournalBackend):
     ) -> list[dict[str, Any]]:
         try:
             return await self._repo.search_past_journals(agent_name, query=query, limit=limit)
-        except Exception as exc:
+        except Exception:  # noqa: BLE001 — Postgres repo/driver errors degrade to empty journal reads
             logger.warning("AgentJournal.search_past_journals failed", exc_info=True)
             return []
 
     async def get_latest_journal_entry(self, agent_name: str) -> str | None:
         try:
             return await self._repo.get_latest_journal_entry(agent_name)
-        except Exception as exc:
+        except Exception:  # noqa: BLE001 — Postgres repo/driver errors degrade to empty journal reads
             logger.warning("AgentJournal.get_latest_journal_entry failed", exc_info=True)
             return None
 
     async def get_latest_journal_created_at(self, agent_name: str) -> datetime | None:
         try:
             return await self._repo.get_latest_journal_created_at(agent_name)
-        except Exception as exc:
+        except Exception:  # noqa: BLE001 — Postgres repo/driver errors degrade to empty journal reads
             logger.warning("AgentJournal.get_latest_journal_created_at failed", exc_info=True)
             return None
 
@@ -482,7 +483,7 @@ class PgAgentJournalBackend(AgentJournalBackend):
     ) -> list[dict[str, Any]]:
         try:
             return await self._repo.get_actions_since_datetime(agent_name, since)
-        except Exception as exc:
+        except Exception:  # noqa: BLE001 — Postgres repo/driver errors degrade to empty journal reads
             logger.warning("AgentJournal.get_actions_since_datetime failed", exc_info=True)
             return []
 
@@ -519,7 +520,7 @@ class DualWriteAgentJournalBackend(AgentJournalBackend):
         await self._sqlite.log_action(agent_name, action_text, outcome, at_date=at_date)
         try:
             await self._pg.log_action(agent_name, action_text, outcome, at_date=at_date)
-        except Exception:
+        except Exception:  # noqa: BLE001 — shadow dual-write must never break the SQLite primary path
             logger.warning("Postgres agent journal shadow log_action failed", exc_info=True)
 
     async def get_actions_for_date(self, agent_name: str, d: date) -> list[dict[str, Any]]:
@@ -547,7 +548,7 @@ class DualWriteAgentJournalBackend(AgentJournalBackend):
         await self._sqlite.save_journal_entry(agent_name, reflection_text, mood, at_date=at_date)
         try:
             await self._pg.save_journal_entry(agent_name, reflection_text, mood, at_date=at_date)
-        except Exception:
+        except Exception:  # noqa: BLE001 — shadow dual-write must never break the SQLite primary path
             logger.warning("Postgres agent journal shadow save_journal_entry failed", exc_info=True)
 
     async def search_past_journals(

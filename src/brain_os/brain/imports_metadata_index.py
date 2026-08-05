@@ -21,7 +21,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import httpx
 from langfuse.decorators import observe
+from tenacity import RetryError as TenacityRetryError
 
 from brain_os.brain.document_ingestor import (
     read_csv,
@@ -41,15 +43,42 @@ from brain_os.brain.imports_intents import (
 from brain_os.exceptions import IngestionError, BrainOSError, LLMError
 from brain_os.schemas.llm_outputs import DocumentMetadata
 from brain_os.services.llm_client import get_llm_client
+from brain_os.systems.document_ai import DocumentAIError
 
 logger = logging.getLogger(__name__)
+
+# Instructor + Ollama structured output can raise AssertionError or RetryError
+# (e.g. "does not support multiple tool calls") — degrade to local metadata.
+_METADATA_LLM_DEGRADABLE: tuple[type[BaseException], ...] = (
+    LLMError,
+    AssertionError,
+    TenacityRetryError,
+)
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 IMPORTS_DIR = _PROJECT_ROOT / "data" / "imports"
 INDEX_PATH = _PROJECT_ROOT / "data" / "brain" / "imports_metadata.json"
 INDEX_PROGRESS_PATH = _PROJECT_ROOT / "data" / "brain" / "imports_index_progress.json"
 
-SUPPORTED_EXTENSIONS = {".pdf", ".xlsx", ".xls", ".csv", ".docx", ".txt", ".pptx", ".json", ".md"}
+SUPPORTED_EXTENSIONS = {
+    ".pdf",
+    ".xlsx",
+    ".xls",
+    ".csv",
+    ".docx",
+    ".txt",
+    ".pptx",
+    ".json",
+    ".md",
+    ".html",
+    ".eml",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".tif",
+    ".tiff",
+}
 _TEXT_PREVIEW_CHARS = 2000
 
 _READERS: dict[str, Callable[[Path], str]] = {
@@ -68,12 +97,18 @@ _READERS: dict[str, Callable[[Path], str]] = {
 
 def _extract_preview(filepath: Path) -> str:
     """Extract the first ~2000 chars of text from a file."""
-    reader = _READERS.get(filepath.suffix.lower())
+    suffix = filepath.suffix.lower()
+    reader = _READERS.get(suffix)
     if reader is not None:
         try:
+            if suffix == ".pdf":
+                # pypdf-only, no fallthrough: Document AI OAuth must not abort a
+                # dream cycle (daemon/headless). An empty preview is acceptable.
+                text = read_pdf(filepath, use_document_ai_fallback=False)
+                return text[:_TEXT_PREVIEW_CHARS] if text else ""
             return reader(filepath)[:_TEXT_PREVIEW_CHARS]
-        except (IngestionError, OSError, ValueError, TypeError):
-            logger.debug("Reader failed for %s, trying plain text", filepath.name)
+        except Exception:
+            logger.debug("Reader failed for %s, trying plain text", filepath.name, exc_info=True)
 
     if filepath.suffix.lower() in (".txt", ".json", ".csv", ".md"):
         try:
@@ -152,7 +187,7 @@ Return ONLY valid JSON with these fields:
         if not payload["intent_confidence"]:
             payload["intent_confidence"] = inferred_conf
         return payload
-    except LLMError as exc:
+    except _METADATA_LLM_DEGRADABLE as exc:
         logger.warning("LLM metadata failed for %s: %s", filename, exc)
         return None
 
@@ -337,7 +372,18 @@ async def build_index(
             if use_llm and preview and len(preview) > 50:
                 await asyncio.sleep(0.3)
 
-        except (IngestionError, OSError, ValueError, TypeError) as exc:
+        except (
+            IngestionError,
+            BrainOSError,
+            LLMError,
+            DocumentAIError,
+            httpx.HTTPError,
+            AssertionError,
+            TenacityRetryError,
+            OSError,
+            ValueError,
+            TypeError,
+        ) as exc:
             logger.warning("Error indexing %s: %s", fp.name, exc)
             errors += 1
 

@@ -55,10 +55,13 @@ class Athena(BaseAgent):
         self.register_tool(
             AgentTool(
                 name="convene_board_meeting",
-                description="Gather perspectives from multiple agents on a topic and synthesise.",
+                description=(
+                    "Board meeting v2: auto agenda from live state, cited position papers, "
+                    "Nemesis dissent, Vera fact-check, tracked decisions on the ledger."
+                ),
                 parameters={
-                    "topic": "The topic to discuss",
-                    "participants": "Comma-separated agent names (or 'all')",
+                    "topic": "Optional operator agenda add-on (empty = live agenda only)",
+                    "participants": "Comma-separated agents, 'default', or 'all'",
                 },
                 handler=self._tool_board_meeting,
             )
@@ -125,6 +128,19 @@ class Athena(BaseAgent):
                 handler=self._tool_describe_skill,
             )
         )
+        self.register_tool(
+            AgentTool(
+                name="describe_agent",
+                description=(
+                    "Return role/description for a Pantheon specialist "
+                    "(use before ask_agent when unsure who owns a domain)."
+                ),
+                parameters={
+                    "agent_name": "Agent name (e.g. 'clio', 'prometheus', 'maestro')",
+                },
+                handler=self._tool_describe_agent,
+            )
+        )
 
     async def _compose_system_prompt(
         self,
@@ -174,21 +190,23 @@ class Athena(BaseAgent):
         except _DELEGATION_ERRORS as exc:
             return f"Agent '{agent_name}' error: {exc}"
 
-    async def _tool_board_meeting(self, topic: str, participants: str = "all") -> str:
+    async def _tool_board_meeting(self, topic: str = "", participants: str = "default") -> str:
         pantheon = self._services.get("pantheon")
         if pantheon is None:
             return "Pantheon not available."
+        p = (participants or "default").strip().lower()
         names = (
-            None
-            if participants.strip().lower() == "all"
-            else [p.strip() for p in participants.split(",")]
+            None if p in {"all", "default", ""} else [x.strip() for x in participants.split(",")]
         )
         try:
-            minutes = await pantheon.board_meeting(topic, names)
+            minutes = await pantheon.board_meeting(topic or "", names)
+            mid = minutes.meeting_id or topic or "board"
+            n_dec = len(minutes.decisions or [])
             return (
-                f"Board meeting on '{topic}':\n"
+                f"Board meeting {mid}:\n"
                 f"Participants: {', '.join(minutes.participants)}\n"
-                f"Synthesis: {minutes.synthesis}"
+                f"Agenda items: {len(minutes.agenda or [])}; decisions written: {n_dec}\n"
+                f"{(minutes.markdown or minutes.synthesis)[:4000]}"
             )
         except (TimeoutError, ToolExecutionError, BrainOSError, RuntimeError, ValueError) as exc:
             return f"Board meeting failed: {exc}"
@@ -229,6 +247,22 @@ class Athena(BaseAgent):
         from brain_os.skills.index_catalog import describe_skill_text
 
         return describe_skill_text(skill_name)
+
+    async def _tool_describe_agent(self, agent_name: str = "") -> str:
+        key = (agent_name or "").strip().lower()
+        if not key:
+            return "Provide agent_name (e.g. 'clio', 'maestro', 'populator')."
+        pantheon = self._services.get(SK.PANTHEON) or self._services.get("pantheon")
+        if pantheon is None:
+            return "Pantheon not available."
+        agent = pantheon.get_agent(key)
+        if agent is None:
+            known = sorted(getattr(pantheon, "agents", {}) or {})
+            hint = ", ".join(known[:20]) if known else "(none)"
+            return f"Unknown agent '{key}'. Known: {hint}"
+        role = getattr(agent, "role", "") or "?"
+        desc = getattr(agent, "description", "") or ""
+        return f"{key} — {role}: {desc}".strip()
 
     async def _tool_read_agent_journal(self, agent_name: str, query: str = "") -> str:
         """Read any agent's journal entries (Athena has access to all agents' journals)."""
@@ -271,6 +305,7 @@ class Athena(BaseAgent):
         else:
             agent_list = "(agent list unavailable)"
 
+        await self._ensure_llm()
         return await self._llm.generate_structured(
             await self._compose_system_prompt(_SYSTEM_PROMPT),
             (

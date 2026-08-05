@@ -68,7 +68,7 @@ Contacts who emailed but never got a reply. Use get_crm_contacts("LEAD_NO_INTERA
 DATA PULLING FROM EMAIL (past conversations):
 - When asked to "pull past conversations", "get everything from email for [contact]", or "pull data from email for a lead", use pull_email_data_skill.
 - Input: email (required), folder (required, e.g. demo_buyer_acme), and optionally analyze=true, store_memory=true, to_send_path=<path to TO_SEND.md>, name=<contact name>.
-- This runs the full workflow: pull_contact_email_history (logic tree + recap) and download_email_attachments (PDFs + optional quote extraction and memory update). See data/knowledge/data_pulling_from_email_past_conversations.md.
+- This runs the full workflow via Brain OS `contact_email_pull`: Gmail history (logic tree + recap) and PDF download (optional quote extraction and memory update). See data/knowledge/data_pulling_from_email_past_conversations.md.
 
 CRITICAL RULES:
 - Never fabricate data. Every claim must trace to an email, CRM record, or KB document.

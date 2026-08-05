@@ -436,12 +436,32 @@ def normalize_outreach_workflow_output(
     return render_outreach_ranking(parsed), True
 
 
+def _guardrails_fail_closed() -> bool:
+    """Honor APP__GUARDRAILS_FAIL_CLOSED (default True / closed)."""
+    try:
+        from brain_os.config import get_settings
+
+        return bool(get_settings().app.guardrails_fail_closed)
+    except Exception:
+        # Config unavailable → fail closed (safer default for C-H5).
+        return True
+
+
+_ALETHEIA_FAIL_NOTE = (
+    "\n\n> **Provenance note:** Compliance check failed; treat claims as unverified."
+)
+_MNEMON_FAIL_NOTE = (
+    "\n\n> **Correction note:** Correction ledger check failed; verify facts before acting."
+)
+
+
 async def run_aletheia_compliance_check(
     raw_response: str,
     agents_used: list[str],
     *,
     aletheia: Any,
     logger: logging.Logger,
+    trace: dict[str, Any] | None = None,
 ) -> tuple[str, list[str], bool]:
     """Run Aletheia provenance check; return updated text/agents and provenance flag."""
     had_provenance = False
@@ -467,8 +487,27 @@ async def run_aletheia_compliance_check(
                 provenance["verdict"],
                 len(unverifiable),
             )
-    except Exception:
+            try:
+                from brain_os.immune.registry import record_trigger
+
+                record_trigger(
+                    "aletheia_provenance",
+                    {
+                        "verdict": provenance.get("verdict"),
+                        "unverifiable_count": len(unverifiable),
+                    },
+                )
+            except Exception:
+                logger.debug("immune record_trigger failed for aletheia", exc_info=True)
+    except Exception as exc:
         logger.exception("Aletheia compliance check failed")
+        if trace is not None:
+            trace["aletheia_check_error"] = str(exc) or type(exc).__name__
+        if _guardrails_fail_closed():
+            had_provenance = True
+            raw_response += _ALETHEIA_FAIL_NOTE
+            if "aletheia" not in agents_used:
+                agents_used.append("aletheia")
     return raw_response, agents_used, had_provenance
 
 
@@ -480,6 +519,7 @@ async def run_aegis_dlp_check(
     logger: logging.Logger,
     post_gapper: bool = False,
     append_agent: bool = True,
+    trace: dict[str, Any] | None = None,
 ) -> tuple[str, list[str], bool]:
     """Run Aegis content scan; return updated text/agents and DLP-flag."""
     had_dlp = False
@@ -502,13 +542,32 @@ async def run_aegis_dlp_check(
                 logger.info("AEGIS | post-Gapper REVIEW_NEEDED — caveat appended")
             else:
                 logger.info("AEGIS | REVIEW_NEEDED — caveat appended")
+        if had_dlp:
+            try:
+                from brain_os.immune.registry import record_trigger
+
+                record_trigger(
+                    "dlp_scan",
+                    {"verdict": verdict, "post_gapper": bool(post_gapper)},
+                )
+            except Exception:
+                logger.debug("immune record_trigger failed for dlp_scan", exc_info=True)
         if append_agent and "aegis" not in agents_used:
             agents_used.append("aegis")
-    except Exception:
+    except Exception as exc:
         if post_gapper:
             logger.exception("Aegis post-Gapper DLP check failed")
         else:
             logger.exception("Aegis DLP check failed")
+        if trace is not None:
+            key = "dlp_check_error_post_gapper" if post_gapper else "dlp_check_error"
+            trace[key] = str(exc) or type(exc).__name__
+        if _guardrails_fail_closed():
+            had_dlp = True
+            raw_response = _DLP_BLOCK_MESSAGE
+            if append_agent and "aegis" not in agents_used:
+                agents_used.append("aegis")
+            logger.warning("AEGIS | fail-closed — response blocked after DLP check error")
     return raw_response, agents_used, had_dlp
 
 
@@ -518,6 +577,7 @@ async def run_mnemon_correction_check(
     *,
     mnemon: Any,
     logger: logging.Logger,
+    trace: dict[str, Any] | None = None,
 ) -> tuple[str, list[str]]:
     """Run Mnemon correction pass; return updated text/agents."""
     if mnemon is None:
@@ -529,8 +589,14 @@ async def run_mnemon_correction_check(
             if "mnemon" not in agents_used:
                 agents_used.append("mnemon")
             logger.info("MNEMON | corrections applied to response")
-    except Exception:
+    except Exception as exc:
         logger.exception("Mnemon correction check failed")
+        if trace is not None:
+            trace["mnemon_check_error"] = str(exc) or type(exc).__name__
+        if _guardrails_fail_closed():
+            raw_response += _MNEMON_FAIL_NOTE
+            if "mnemon" not in agents_used:
+                agents_used.append("mnemon")
     return raw_response, agents_used
 
 

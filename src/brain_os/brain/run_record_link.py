@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from brain_os.brain.run_record_access import fetch_run_record, run_records_enabled
-from brain_os.brain.run_record_store import RunRecordStore
+from brain_os.brain.run_record_store import RunRecordStore, build_run_record_store
 from brain_os.exceptions import BrainOSError
 from brain_os.schemas.run_record import RunRecord
 
@@ -42,7 +42,7 @@ async def append_run_link(
     if not rid or not run_records_enabled():
         return
     try:
-        st = store or RunRecordStore()
+        st = store or build_run_record_store()
         record = await st.get(rid)
         if record is None:
             return

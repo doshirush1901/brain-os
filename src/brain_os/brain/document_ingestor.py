@@ -25,12 +25,14 @@ import sqlite3
 import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
 import tiktoken
+from neo4j.exceptions import Neo4jError
 
 from brain_os.brain.qdrant_manager import QdrantManager
 from brain_os.data.models import KnowledgeItem
@@ -41,16 +43,27 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_INGEST_GRAPH_WRITE_ERRORS = (DatabaseError, OSError, ValueError, TypeError)
+_INGEST_GRAPH_WRITE_ERRORS = (DatabaseError, Neo4jError, OSError, ValueError, TypeError)
+_INGEST_BOOKKEEPING_ERRORS = (
+    DatabaseError,
+    IngestionError,
+    OSError,
+    RuntimeError,
+    ValueError,
+    TypeError,
+    httpx.HTTPError,
+)
 
 
 def _source_to_id(source: str) -> str:
     return re.sub(r"[^a-z0-9:_-]+", "_", (source or "").strip().lower()).strip("_")[:180]
 
 
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"}
 _SUPPORTED_EXTENSIONS = {
     ".pdf",
     ".xlsx",
+    ".xls",
     ".docx",
     ".txt",
     ".csv",
@@ -59,6 +72,7 @@ _SUPPORTED_EXTENSIONS = {
     ".md",
     ".eml",
     ".json",
+    *_IMAGE_EXTENSIONS,
 }
 _DEFAULT_CHUNK_SIZE = 512
 _DEFAULT_OVERLAP = 128
@@ -134,6 +148,75 @@ def _file_hash(path: Path) -> str:
 
 
 _MIN_USEFUL_CHARS = 50
+_PAGE_MARKER_RE = re.compile(r"<!--\s*ira-page:(\d+)\s*-->")
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentParseResult:
+    """Outcome of a document read cascade (text + winning parser)."""
+
+    text: str
+    parser: str
+    page_offsets: tuple[tuple[int, int], ...] = ()
+
+
+def _log_parser_win(path: Path, parser: str, char_count: int) -> None:
+    logger.info(
+        "Document parse succeeded path=%s parser=%s chars=%d",
+        path,
+        parser,
+        char_count,
+    )
+
+
+def _normalize_reader_output(value: str | DocumentParseResult) -> DocumentParseResult:
+    if isinstance(value, DocumentParseResult):
+        return value
+    return DocumentParseResult(text=value or "", parser="legacy_str_reader")
+
+
+def _page_number_from_chunk(chunk: str) -> int | None:
+    matches = list(_PAGE_MARKER_RE.finditer(chunk))
+    if not matches:
+        return None
+    return int(matches[-1].group(1))
+
+
+def _strip_page_markers(text: str) -> str:
+    cleaned = _PAGE_MARKER_RE.sub("", text)
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
+def parse_unstructured_elements(elements: list[dict[str, Any]]) -> DocumentParseResult:
+    """Convert Unstructured API element JSON into plain text with page markers."""
+    parts: list[str] = []
+    last_page: int | None = None
+    for el in elements:
+        el_type = el.get("type", "")
+        text = el.get("text", "").strip()
+        if not text:
+            continue
+        page_raw = el.get("metadata", {}).get("page_number")
+        page: int | None = None
+        if page_raw is not None:
+            try:
+                page = int(page_raw)
+            except (TypeError, ValueError):
+                page = None
+        if page is not None and page != last_page:
+            parts.append(f"<!-- ira-page:{page} -->")
+            last_page = page
+        if el_type == "Title":
+            parts.append(f"## {text}")
+        elif el_type == "Table":
+            html = el.get("metadata", {}).get("text_as_html", "")
+            parts.append(html if html else text)
+        else:
+            parts.append(text)
+    result = "\n\n".join(parts)
+    if len(result.strip()) < _MIN_USEFUL_CHARS:
+        return DocumentParseResult(text="", parser="unstructured")
+    return DocumentParseResult(text=result, parser="unstructured")
 
 
 @contextmanager
@@ -159,18 +242,26 @@ def read_pdf(path: Path, *, use_document_ai_fallback: bool = True) -> str:
     Document AI OCR. When False, only pypdf is used (avoids slow/costly fallbacks during
     bulk passes). For the full ingestion-quality cascade, use :func:`extract_pdf_text`.
     """
+    return _read_pdf_parse_result(path, use_document_ai_fallback=use_document_ai_fallback).text
+
+
+def _read_pdf_parse_result(
+    path: Path, *, use_document_ai_fallback: bool = True
+) -> DocumentParseResult:
     text = _read_pdf_pypdf(path)
     if len(text.strip()) >= _MIN_USEFUL_CHARS:
-        return text
+        _log_parser_win(path, "pypdf", len(text.strip()))
+        return DocumentParseResult(text=text, parser="pypdf")
     if use_document_ai_fallback:
         pdfco_text = _read_pdf_pdfco(path)
         if len(pdfco_text.strip()) >= _MIN_USEFUL_CHARS:
-            logger.info("PDF.co recovered text for %s (%d chars)", path, len(pdfco_text.strip()))
-            return pdfco_text
+            _log_parser_win(path, "pdfco", len(pdfco_text.strip()))
+            return DocumentParseResult(text=pdfco_text, parser="pdfco")
         ocr_text = _read_pdf_document_ai(path)
         if ocr_text:
-            return ocr_text
-    return text
+            _log_parser_win(path, "document_ai", len(ocr_text.strip()))
+            return DocumentParseResult(text=ocr_text, parser="document_ai")
+    return DocumentParseResult(text=text, parser="pypdf")
 
 
 def _read_pdf_pypdf(path: Path) -> str:
@@ -241,7 +332,7 @@ def _read_pdf_pdfco(path: Path) -> str:
         concurrent.futures.TimeoutError,
         ValueError,
         TypeError,
-    ) as exc:
+    ):
         logger.warning("PDF.co text extraction failed for %s", path, exc_info=True)
         return ""
 
@@ -293,7 +384,9 @@ def _read_pdf_document_ai(path: Path) -> str:
                     path,
                 )
                 return ""
-    except (LLMError, DatabaseError, httpx.HTTPError, OSError, TimeoutError) as exc:
+    except Exception:
+        # Broad catch: google.auth TransportError / DocumentAIError / proxy
+        # failures must never kill dream stage0 preview indexing.
         logger.warning("Document AI OCR fallback failed for %s", path, exc_info=True)
         return ""
 
@@ -404,12 +497,12 @@ def read_xls(path: Path) -> str:
     return "\n".join(parts)
 
 
-def _read_with_unstructured(path: Path) -> str:
+def _read_with_unstructured(path: Path) -> DocumentParseResult:
     """Parse a document via the Unstructured.io API.
 
-    Handles PDF, DOCX, PPTX, XLSX, images, HTML, and EML with automatic
-    OCR, table extraction, and layout detection.  Returns empty string
-    when the API key is not configured or the call fails.
+    Handles PDF, DOCX, PPTX, XLSX, HTML, EML, and raster images with OCR,
+    table extraction, and layout detection. Returns empty text when the API key
+    is not configured or the call fails.
     """
     try:
         from brain_os.config import get_settings
@@ -418,42 +511,33 @@ def _read_with_unstructured(path: Path) -> str:
         api_key = settings.unstructured.api_key.get_secret_value()
         api_url = settings.unstructured.api_url
         if not api_key:
-            return ""
-
-        import httpx
+            return DocumentParseResult(text="", parser="unstructured")
 
         with open(path, "rb") as f:
             resp = httpx.post(
                 api_url,
                 headers={"unstructured-api-key": api_key},
                 files={"files": (path.name, f)},
-                data={"strategy": "auto"},
+                data={
+                    "strategy": "auto",
+                    "pdf_infer_table_structure": "true",
+                },
                 timeout=120,
             )
         resp.raise_for_status()
         elements = resp.json()
-        parts: list[str] = []
-        for el in elements:
-            el_type = el.get("type", "")
-            text = el.get("text", "").strip()
-            if not text:
-                continue
-            if el_type == "Title":
-                parts.append(f"## {text}")
-            elif el_type == "Table":
-                html = el.get("metadata", {}).get("text_as_html", "")
-                parts.append(html if html else text)
-            else:
-                parts.append(text)
-        result = "\n\n".join(parts)
-        if len(result.strip()) >= _MIN_USEFUL_CHARS:
-            return result
-    except (httpx.HTTPError, json.JSONDecodeError, OSError, ValueError, TypeError) as exc:
+        if not isinstance(elements, list):
+            return DocumentParseResult(text="", parser="unstructured")
+        result = parse_unstructured_elements(elements)
+        if result.text.strip():
+            _log_parser_win(path, "unstructured", len(result.text.strip()))
+        return result
+    except (httpx.HTTPError, json.JSONDecodeError, OSError, ValueError, TypeError):
         logger.debug("Unstructured API failed for %s — falling back", path, exc_info=True)
-    return ""
+    return DocumentParseResult(text="", parser="unstructured")
 
 
-def _read_with_docling(path: Path) -> str:
+def _read_with_docling(path: Path) -> DocumentParseResult:
     """Parse any supported document via Docling for high-fidelity extraction.
 
     Handles tables, reading order, formulas, and complex layouts far better
@@ -461,8 +545,12 @@ def _read_with_docling(path: Path) -> str:
     """
     try:
         from brain_os.config import get_settings
+        from brain_os.systems.data_dir_lock import coerce_config_path
 
-        hf_cache = get_settings().app.hf_cache_dir.strip()
+        try:
+            hf_cache = coerce_config_path(get_settings().app.hf_cache_dir)
+        except ValueError:
+            hf_cache = ""
         if hf_cache:
             os.makedirs(hf_cache, exist_ok=True)
             os.environ["HUGGINGFACE_HUB_CACHE"] = hf_cache
@@ -474,7 +562,8 @@ def _read_with_docling(path: Path) -> str:
         # When Docling exposes figure/caption text (e.g. PictureItem captions), append
         # "Figure N: <caption>" here for better retrieval of figure references.
         if md and len(md.strip()) >= _MIN_USEFUL_CHARS:
-            return md
+            _log_parser_win(path, "docling", len(md.strip()))
+            return DocumentParseResult(text=md, parser="docling")
     except OSError as e:
         if e.errno == errno.ENOSPC:
             logger.warning(
@@ -485,31 +574,55 @@ def _read_with_docling(path: Path) -> str:
             logger.debug(
                 "Docling failed for %s — falling back to legacy reader", path, exc_info=True
             )
-    except (ImportError, ValueError, TypeError, RuntimeError) as exc:
+    except (ImportError, ValueError, TypeError, RuntimeError):
         logger.debug("Docling failed for %s — falling back to legacy reader", path, exc_info=True)
-    return ""
+    return DocumentParseResult(text="", parser="docling")
+
+
+def _extract_pdf_parse_result(
+    path: Path, *, use_document_ai_fallback: bool = True
+) -> DocumentParseResult:
+    """PDF lane: Docling → pypdf / PDF.co / Document AI (no Unstructured)."""
+    docling = _read_with_docling(path)
+    if docling.text and len(docling.text.strip()) >= _MIN_USEFUL_CHARS:
+        return docling
+    return _read_pdf_parse_result(path, use_document_ai_fallback=use_document_ai_fallback)
 
 
 def extract_pdf_text(path: Path, *, use_document_ai_fallback: bool = True) -> str:
     """Extract PDF text using the same cascade as knowledge ingestion.
 
-    Order: Docling → Unstructured (when configured) → :func:`read_pdf`
-    (pypdf, then PDF.co / Document AI when *use_document_ai_fallback* is True).
+    Order: Docling → pypdf → PDF.co → Document AI when *use_document_ai_fallback*
+    is True. Unstructured is not used on the PDF path (office formats only).
 
     For lightweight previews over many files (e.g. imports metadata snippets),
-    call :func:`read_pdf` directly to avoid Docling/Unstructured latency and cost.
+    call :func:`read_pdf` directly to avoid Docling latency and cost.
     """
-    text = _read_with_docling(path)
-    if text and len(text.strip()) >= _MIN_USEFUL_CHARS:
-        return text
-    text = _read_with_unstructured(path)
-    if text:
-        return text
-    return read_pdf(path, use_document_ai_fallback=use_document_ai_fallback)
+    return _extract_pdf_parse_result(path, use_document_ai_fallback=use_document_ai_fallback).text
 
 
-_UNSTRUCTURED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".xlsx", ".html", ".md", ".eml"}
+_UNSTRUCTURED_EXTENSIONS = {
+    ".docx",
+    ".pptx",
+    ".xlsx",
+    ".html",
+    ".md",
+    ".eml",
+    *_IMAGE_EXTENSIONS,
+}
 _DOCLING_EXTENSIONS = {".pdf", ".docx", ".pptx", ".xlsx", ".html", ".md"}
+
+
+def _wrap_legacy_reader(parser: str, fn: Any) -> Any:
+    def _reader(path: Path) -> DocumentParseResult:
+        text = fn(path) or ""
+        stripped = text.strip()
+        if stripped and len(stripped) >= _MIN_USEFUL_CHARS:
+            _log_parser_win(path, parser, len(stripped))
+        return DocumentParseResult(text=text, parser=parser)
+
+    return _reader
+
 
 _LEGACY_READERS = {
     ".pdf": read_pdf,
@@ -525,47 +638,60 @@ _LEGACY_READERS = {
 
 
 def _get_reader(ext: str):
-    """Return a reader function. PDF uses Docling first (tables/layout); others use Unstructured → Docling → legacy."""
-    # PDF: Docling first for better tables and reading order, then Unstructured, then pypdf + Document AI.
+    """Return a reader that yields :class:`DocumentParseResult`."""
     if ext == ".pdf":
 
-        def _pdf_reader(path: Path) -> str:
-            return extract_pdf_text(path, use_document_ai_fallback=True)
+        def _pdf_reader(path: Path) -> DocumentParseResult:
+            return _extract_pdf_parse_result(path, use_document_ai_fallback=True)
 
         return _pdf_reader
+    if ext in _IMAGE_EXTENSIONS:
+
+        def _image_reader(path: Path) -> DocumentParseResult:
+            return _read_with_unstructured(path)
+
+        return _image_reader
     if ext in _UNSTRUCTURED_EXTENSIONS:
 
-        def _cascading_reader(path: Path) -> str:
-            text = _read_with_unstructured(path)
-            if text:
-                return text
+        def _cascading_reader(path: Path) -> DocumentParseResult:
+            unstructured = _read_with_unstructured(path)
+            if unstructured.text.strip():
+                return unstructured
             if ext in _DOCLING_EXTENSIONS:
-                text = _read_with_docling(path)
-                if text:
-                    return text
+                docling = _read_with_docling(path)
+                if docling.text.strip():
+                    return docling
             legacy = _LEGACY_READERS.get(ext)
-            return legacy(path) if legacy else ""
+            if legacy is None:
+                return DocumentParseResult(text="", parser="none")
+            return _wrap_legacy_reader(f"legacy_{ext.lstrip('.')}", legacy)(path)
 
         return _cascading_reader
     if ext in _DOCLING_EXTENSIONS:
 
-        def _docling_then_legacy(path: Path) -> str:
-            text = _read_with_docling(path)
-            if text:
-                return text
+        def _docling_then_legacy(path: Path) -> DocumentParseResult:
+            docling = _read_with_docling(path)
+            if docling.text.strip():
+                return docling
             legacy = _LEGACY_READERS.get(ext)
-            return legacy(path) if legacy else ""
+            if legacy is None:
+                return DocumentParseResult(text="", parser="none")
+            return _wrap_legacy_reader(f"legacy_{ext.lstrip('.')}", legacy)(path)
 
         return _docling_then_legacy
-    return _LEGACY_READERS.get(ext)
+    legacy = _LEGACY_READERS.get(ext)
+    return _wrap_legacy_reader(f"legacy_{ext.lstrip('.')}", legacy) if legacy else None
 
 
-_READERS = {ext: _get_reader(ext) or fn for ext, fn in _LEGACY_READERS.items()}
+_READERS = {
+    ext: _get_reader(ext) or _wrap_legacy_reader(f"legacy_{ext.lstrip('.')}", fn)
+    for ext, fn in _LEGACY_READERS.items()
+}
 _READERS.update(
     {
         ext: _get_reader(ext)
-        for ext in _UNSTRUCTURED_EXTENSIONS | _DOCLING_EXTENSIONS
-        if ext not in _READERS
+        for ext in _UNSTRUCTURED_EXTENSIONS | _DOCLING_EXTENSIONS | _IMAGE_EXTENSIONS
+        if ext not in _READERS and _get_reader(ext) is not None
     }
 )
 
@@ -594,7 +720,7 @@ def extract_text_from_upload_bytes(filename: str, data: bytes) -> str:
         reader = _get_reader(ext)
         if reader is None:
             return ""
-        return (reader(path) or "").strip()
+        return _normalize_reader_output(reader(path)).text.strip()
     finally:
         try:
             if path is not None:
@@ -678,7 +804,7 @@ def _get_voyage_embeddings():
         if not api_key:
             return None
         return VoyageAIEmbeddings(model=model, api_key=api_key)
-    except (ImportError, OSError, ValueError, TypeError) as exc:
+    except (ImportError, OSError, ValueError, TypeError):
         logger.debug("VoyageAI embeddings for Chonkie unavailable", exc_info=True)
         return None
 
@@ -730,7 +856,7 @@ def chunk_text(
                 pass
             else:
                 return _restore_tables(result, tables)
-    except (ImportError, OSError, ValueError, TypeError, RuntimeError) as exc:
+    except (ImportError, OSError, ValueError, TypeError, RuntimeError):
         logger.debug("Chonkie semantic chunking failed — using tiktoken fallback", exc_info=True)
 
     fallback = _chunk_text_tiktoken(protected_text, chunk_size, overlap)
@@ -769,10 +895,15 @@ class DocumentIngestor:
         *,
         knowledge_graph: KnowledgeGraph | None = None,
         ledger_path: Path = _LEDGER_PATH,
+        digestion_metrics_path: Path | None = None,
+        quarantine_dir: Path | None = None,
     ) -> None:
         self._qdrant = qdrant
         self._graph = knowledge_graph
         self._ledger = _init_ledger(ledger_path)
+        # Phase 4 stomach hardening — None means module defaults from brain_os.brain.digestion.
+        self._digestion_metrics_path = digestion_metrics_path
+        self._quarantine_dir = quarantine_dir
 
     async def __aenter__(self) -> DocumentIngestor:
         return self
@@ -798,6 +929,8 @@ class DocumentIngestor:
         files: list[dict[str, Any]] = []
         for p in sorted(root.rglob("*")):
             if not p.is_file():
+                continue
+            if "quarantine" in p.parts:
                 continue
             ext = p.suffix.lower()
             if ext not in _SUPPORTED_EXTENSIONS:
@@ -850,7 +983,7 @@ class DocumentIngestor:
                 **model_kw,
             )
             return summary.strip()
-        except (LLMError, httpx.HTTPError, OSError, ValueError, TypeError) as exc:
+        except (LLMError, httpx.HTTPError, OSError, ValueError, TypeError):
             logger.warning(
                 "Document context generation failed for %s — proceeding without context",
                 filename,
@@ -896,15 +1029,36 @@ class DocumentIngestor:
             return 0
 
         text = await asyncio.to_thread(reader, path)
+        parse = _normalize_reader_output(text)
+        text = parse.text
+        parse_path = parse.parser
 
         if ext == ".pdf" and len(text.strip()) < _MIN_USEFUL_CHARS:
             ocr_text = await self._ocr_fallback(path)
             if ocr_text:
                 text = ocr_text
+                parse_path = "document_ai_ocr"
+                _log_parser_win(path, parse_path, len(ocr_text.strip()))
 
         if not text.strip():
             logger.warning("Empty content after reading: %s", path)
+            self._quarantine(path, "empty_or_unreadable_content")
             return 0
+
+        from brain_os.brain.email_text_cleaner import (
+            EMAIL_INGEST_VERSION,
+            clean_email_text,
+            looks_like_email_source,
+        )
+
+        ingest_version: str | None = None
+        if looks_like_email_source(source=str(path), source_category=category, extension=ext):
+            text = clean_email_text(text)
+            if not text.strip():
+                logger.warning("Empty content after email clean: %s", path)
+                self._quarantine(path, "empty_after_email_clean")
+                return 0
+            ingest_version = EMAIL_INGEST_VERSION
 
         doc_context = await self._generate_document_context(text, path.name)
 
@@ -920,19 +1074,62 @@ class DocumentIngestor:
         if isinstance(teacher_extra, dict):
             chunk_meta.update(teacher_extra)
 
-        items = [
-            KnowledgeItem(
-                source=str(path),
-                source_category=category,
-                content=(f"[Source Context: {doc_context}]\n\n{chunk}" if doc_context else chunk),
-                metadata={
-                    **chunk_meta,
-                    "chunk_index": i,
-                    "total_chunks": len(chunks),
-                },
+        from brain_os.brain.qdrant_payload_hygiene import should_reject_for_ingest
+
+        items: list[KnowledgeItem] = []
+        rejected_junk = 0
+        for i, chunk in enumerate(chunks):
+            chunk_body = _strip_page_markers(chunk)
+            page_number = _page_number_from_chunk(chunk)
+            content = (
+                f"[Source Context: {doc_context}]\n\n{chunk_body}" if doc_context else chunk_body
             )
-            for i, chunk in enumerate(chunks)
-        ]
+            if should_reject_for_ingest(
+                {
+                    "content": content,
+                    "source": str(path),
+                    "source_category": category,
+                    "metadata": {**chunk_meta, "chunk_index": i},
+                }
+            ):
+                rejected_junk += 1
+                continue
+            item_meta: dict[str, Any] = {
+                **chunk_meta,
+                "chunk_index": i,
+                "total_chunks": len(chunks),
+                "parse_parser": parse_path,
+            }
+            if ingest_version:
+                item_meta.setdefault("ingest_version", ingest_version)
+                item_meta.setdefault("doc_type", item_meta.get("doc_type") or "email")
+            if page_number is not None:
+                item_meta["page_number"] = page_number
+            items.append(
+                KnowledgeItem(
+                    source=str(path),
+                    source_category=category,
+                    content=content,
+                    metadata=item_meta,
+                )
+            )
+
+        if not items:
+            logger.warning(
+                "All %d chunks rejected by hygiene gate for %s (junk=%d)",
+                len(chunks),
+                path,
+                rejected_junk,
+            )
+            self._record_meal(
+                path,
+                status="skipped",
+                chunks=0,
+                parse_path=parse_path,
+                reason=f"all_chunks_rejected_junk:{rejected_junk}",
+                chunks_rejected_junk=rejected_junk,
+            )
+            return 0
 
         upserted = await self._qdrant.upsert_items(items)
 
@@ -940,6 +1137,13 @@ class DocumentIngestor:
             await self._extract_and_store_entities(text, str(path))
 
         self._record_ingestion(str(path), current_hash, upserted)
+        self._record_meal(
+            path,
+            status="ok",
+            chunks=upserted,
+            parse_path=parse_path,
+            chunks_rejected_junk=rejected_junk,
+        )
         logger.info("Ingested %s -> %d chunks (category: %s)", path, upserted, category)
         return upserted
 
@@ -978,6 +1182,16 @@ class DocumentIngestor:
             except (IngestionError, DatabaseError, httpx.HTTPError, OSError, LLMError) as exc:
                 logger.exception("Failed to ingest %s", file_info["path"])
                 errors.append({"path": file_info["path"], "error": str(exc)})
+                # Never half-index: roll back any partial points, then quarantine.
+                try:
+                    await self._qdrant.delete_by_source(file_info["path"])
+                except _INGEST_BOOKKEEPING_ERRORS:
+                    logger.warning(
+                        "Rollback of partial points failed for %s",
+                        file_info["path"],
+                        exc_info=True,
+                    )
+                self._quarantine(Path(file_info["path"]), f"ingest_error: {exc}")
 
         summary: dict[str, Any] = {
             "files_processed": files_processed,
@@ -988,6 +1202,49 @@ class DocumentIngestor:
         }
         logger.info("Ingestion complete: %s", summary)
         return summary
+
+    # ── indigestion quarantine (Phase 4) ─────────────────────────────────
+
+    def _record_meal(self, path: Path | str, **kwargs: Any) -> None:
+        """Append one digestion record (best-effort — never breaks ingestion)."""
+        try:
+            from brain_os.brain.digestion import DEFAULT_METRICS_PATH, record_meal
+
+            record_meal(
+                path,
+                metrics_path=self._digestion_metrics_path or DEFAULT_METRICS_PATH,
+                **kwargs,
+            )
+        except _INGEST_BOOKKEEPING_ERRORS:
+            logger.debug("Digestion meal record failed for %s", path, exc_info=True)
+
+    def _quarantine(self, path: Path, reason: str) -> None:
+        """Quarantine a failed/unreadable ingest and record the meal (best-effort).
+
+        With the default quarantine directory, only files inside ``data/imports``
+        are moved — never arbitrary paths handed to ``ingest_file``. An explicit
+        ``quarantine_dir`` (tests, custom pipelines) always moves.
+        """
+        try:
+            from brain_os.brain.digestion import DEFAULT_QUARANTINE_DIR, quarantine_file
+            from brain_os.config import get_settings
+
+            cfg = get_settings().app
+            enabled = bool(getattr(cfg, "stomach_quarantine_enabled", True))
+            qdir = self._quarantine_dir or DEFAULT_QUARANTINE_DIR
+
+            in_imports = True
+            if self._quarantine_dir is None:
+                imports_root = Path("data/imports").resolve()
+                in_imports = path.resolve().is_relative_to(imports_root)
+
+            if enabled and in_imports:
+                quarantine_file(path, reason, quarantine_dir=qdir)
+                self._record_meal(path, status="quarantined", reason=reason)
+            else:
+                self._record_meal(path, status="quarantined", reason=f"{reason} (move skipped)")
+        except _INGEST_BOOKKEEPING_ERRORS:
+            logger.debug("Quarantine bookkeeping failed for %s", path, exc_info=True)
 
     # ── Document AI OCR fallback ─────────────────────────────────────────
 
@@ -1004,7 +1261,7 @@ class DocumentIngestor:
             if text.strip():
                 logger.info("Document AI OCR recovered text for %s (%d chars)", path, len(text))
             return text
-        except (LLMError, DatabaseError, httpx.HTTPError, OSError) as exc:
+        except (LLMError, DatabaseError, httpx.HTTPError, OSError):
             logger.warning("Document AI OCR fallback failed for %s", path, exc_info=True)
             return ""
 
@@ -1090,7 +1347,7 @@ class DocumentIngestor:
             from brain_os.brain.entity_extractor import extract_entities_gliner
 
             gliner_entities = await asyncio.to_thread(extract_entities_gliner, text)
-        except (OSError, ImportError, RuntimeError, ValueError, TypeError) as exc:
+        except (OSError, ImportError, RuntimeError, ValueError, TypeError):
             logger.debug("GLiNER extraction failed for %s — using LLM only", source)
             gliner_entities = {"companies": [], "people": [], "machines": [], "relationships": []}
 

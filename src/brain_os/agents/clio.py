@@ -11,7 +11,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from brain_os.agents.base_agent import AgentTool, BaseAgent
+from brain_os.agents.base_agent import (
+    AgentTool,
+    BaseAgent,
+    _coerce_tool_limit,
+    _coerce_tool_query,
+)
 from brain_os.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -41,11 +46,21 @@ class Clio(BaseAgent):
                 name="search_qdrant",
                 description="Search the Qdrant vector store, optionally filtered by category.",
                 parameters={
-                    "query": "Search query string",
-                    "category": "Optional category filter (leave empty for all)",
-                    "limit": "Max results (default 10)",
+                    "query": "string (required) — non-empty search text",
+                    "category": "string (optional) — category filter; empty for all",
+                    "limit": "integer (optional, default 10, max 50)",
                 },
                 handler=self._tool_search_qdrant,
+                json_schema={
+                    "type": "object",
+                    "required": ["query"],
+                    "additionalProperties": False,
+                    "properties": {
+                        "query": {"type": "string", "minLength": 1},
+                        "category": {"type": "string", "default": ""},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10},
+                    },
+                },
             )
         )
         self.register_tool(
@@ -77,18 +92,41 @@ class Clio(BaseAgent):
 
     async def _tool_search_qdrant(
         self,
-        query: str,
-        category: str = "",
-        limit: str = "10",
+        query: Any = "",
+        category: Any = "",
+        limit: Any = "10",
+        **_extra: Any,
     ) -> str:
-        if category:
-            results = await self.search_category(query, category, limit=int(limit))
-        else:
-            results = await self.search_knowledge(query, limit=int(limit))
+        q = _coerce_tool_query(query)
+        if not q:
+            return (
+                "No results found. Provide a non-empty query string "
+                '(JSON: {"query": "<text>", "limit": <int optional>}).'
+            )
+        lim = _coerce_tool_limit(limit)
+        cat = _coerce_tool_query(category)
+        try:
+            if cat:
+                results = await self.search_category(q, cat, limit=lim)
+            else:
+                results = await self.search_knowledge(q, limit=lim)
+        except Exception as exc:
+            logger.warning("search_qdrant degraded for clio (%s: %s)", type(exc).__name__, exc)
+            return f"No results found (knowledge search unavailable: {type(exc).__name__})."
         if not results:
             return "No results found."
-        lines = [f"- [{r.get('source', '?')}] {r.get('content', '')[:400]}" for r in results]
-        return "\n".join(lines)
+        from brain_os.brain.untrusted_input import fence_untrusted
+
+        lines = []
+        for r in results:
+            if not isinstance(r, dict):
+                continue
+            content = r.get("content", "")
+            content_s = content if isinstance(content, str) else str(content or "")
+            lines.append(f"- [{r.get('source', '?')}] {content_s[:400]}")
+        if not lines:
+            return "No results found."
+        return fence_untrusted("\n".join(lines), source="kb_search")
 
     async def _tool_ask_alexandros(self, query: str) -> str:
         return await self._tool_ask_agent("alexandros", query)

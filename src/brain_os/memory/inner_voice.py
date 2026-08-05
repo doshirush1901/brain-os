@@ -131,6 +131,7 @@ class InnerVoice:
                 user_content,
                 InnerReflection,
                 name="inner_voice.reflect",
+                model_tier="cheap",
             )
             reflection_type = ReflectionType(result.reflection_type)
             should_surface = result.should_surface

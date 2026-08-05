@@ -571,36 +571,46 @@ class Atlas(BaseAgent):
         return await self.call_llm(_SYSTEM_PROMPT, user_msg)
 
     async def payment_alerts(self) -> str:
-        """Check for overdue payment milestones across projects."""
-        results = await self.search_domain_knowledge(
-            "payment milestone overdue invoice pending receivable",
-            limit=10,
-        )
-        kb_context = self._format_context(results)
+        """Check open commercial payment milestones + invoice registry (structured)."""
+        try:
+            from brain_os.data.crm import CRMDatabase
+            from brain_os.services.invoice_service import (
+                InvoiceService,
+                format_payment_alerts_text,
+            )
+
+            svc = InvoiceService(CRMDatabase().session_factory)
+            payload = await svc.payment_alerts_structured()
+            return format_payment_alerts_text(payload)
+        except Exception:
+            logger.warning(
+                "structured payment_alerts failed; falling back to logbook summary",
+                exc_info=True,
+            )
 
         logbook_context = ""
-        async with aiosqlite.connect(str(_DB_PATH), timeout=30.0) as db:
-            await db.execute("PRAGMA busy_timeout=30000")
-            db.row_factory = aiosqlite.Row
-            async with db.execute(
-                "SELECT p.name, e.event_type, e.description, e.created_at "
-                "FROM events e JOIN projects p ON e.project_id = p.id "
-                "WHERE e.event_type IN ('payment', 'invoice', 'milestone') "
-                "ORDER BY e.created_at DESC LIMIT 20",
-            ) as cursor:
-                events = await cursor.fetchall()
+        try:
+            async with aiosqlite.connect(str(_DB_PATH), timeout=30.0) as db:
+                await db.execute("PRAGMA busy_timeout=30000")
+                db.row_factory = aiosqlite.Row
+                async with db.execute(
+                    "SELECT p.name, e.event_type, e.description, e.created_at "
+                    "FROM events e JOIN projects p ON e.project_id = p.id "
+                    "WHERE e.event_type IN ('payment', 'invoice', 'milestone') "
+                    "ORDER BY e.created_at DESC LIMIT 20",
+                ) as cursor:
+                    events = await cursor.fetchall()
+                if events:
+                    logbook_context = "Payment-related events:\n" + "\n".join(
+                        f"  - [{e['event_type']}] {e['name']}: {e['description']} "
+                        f"({e['created_at']})"
+                        for e in events
+                    )
+        except Exception:
+            logger.warning("atlas logbook payment query failed", exc_info=True)
 
-            if events:
-                logbook_context = "Payment-related events:\n" + "\n".join(
-                    f"  - [{e['event_type']}] {e['name']}: {e['description']} ({e['created_at']})"
-                    for e in events
-                )
-
-        portfolio_brief = format_portfolio_brief()
-        return await self.call_llm(
-            _SYSTEM_PROMPT,
-            f"Identify any overdue payment milestones or pending invoices.\n\n"
-            f"{portfolio_brief or ''}\n\n"
-            f"Logbook payment events:\n{logbook_context or '(no payment events logged)'}\n\n"
-            f"Knowledge base data:\n{kb_context}",
+        return (
+            "PAYMENT ALERTS (fallback — structured tables unavailable)\n"
+            f"{logbook_context or 'No payment events in SQLite logbook.'}\n"
+            "Run migration 029 + seed work_orders for structured receivables."
         )

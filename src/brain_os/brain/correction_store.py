@@ -116,6 +116,22 @@ class CorrectionStore:
         )
         await self._db.commit()
 
+    async def get_recent_corrections(self, limit: int = 500) -> list[dict[str, Any]]:
+        """Return the most recent corrections regardless of status.
+
+        Used by the immune antibodies API (``brain_os.immune.antibodies``) —
+        processed corrections still override stale claims.
+        """
+        assert self._db is not None, "Call initialize() first"
+        cursor = await self._db.execute(
+            "SELECT id, entity, category, severity, old_value, new_value, source, created_at, status "
+            "FROM corrections ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        await cursor.close()
+        return [_row_to_dict(r) for r in rows]
+
     async def get_corrections_by_entity(self, entity: str) -> list[dict[str, Any]]:
         """Return all corrections (any status) for a given entity."""
         assert self._db is not None, "Call initialize() first"

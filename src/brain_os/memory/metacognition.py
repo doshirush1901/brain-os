@@ -104,12 +104,13 @@ class Metacognition:
                 user_msg,
                 KnowledgeAssessment,
                 name="metacognition.assess",
+                model_tier="cheap",
             )
             state_str = result.state
             confidence = result.confidence
             conflicts = result.conflicts
             gaps = result.gaps
-        except Exception as exc:
+        except Exception:
             logger.exception("Structured LLM call failed in Metacognition")
             if avg_score >= 0.7 and has_high_confidence:
                 state_str = "KNOW_UNVERIFIED"

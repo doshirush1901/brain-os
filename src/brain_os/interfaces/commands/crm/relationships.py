@@ -10,7 +10,7 @@ import typer
 from rich.panel import Panel
 from rich.table import Table
 
-from brain_os.interfaces.cli_runtime import (
+from brain_os.runtime.cli_runtime import (
     _run,
 )
 

@@ -28,12 +28,18 @@ retrieval_profile_var: contextvars.ContextVar[str] = contextvars.ContextVar(
     "retrieval_profile", default="default"
 )
 
+# Per-task last search health (replaces instance last-writer-wins field for isolation).
+last_search_health_var: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "last_search_health", default=None
+)
+
 
 async def with_retrieval_context(
     run_id: str | None,
     profile: str | None,
     fn: Callable[..., Awaitable[_T]],
     *args: Any,
+    mem0_user_id: str | None = None,
     **kwargs: Any,
 ) -> _T:
     """Set retrieval context vars for the duration of ``await fn(*args, **kwargs)``."""
@@ -42,6 +48,8 @@ async def with_retrieval_context(
         tokens.append((retrieval_run_id_var, retrieval_run_id_var.set(run_id)))
     if profile is not None:
         tokens.append((retrieval_profile_var, retrieval_profile_var.set(profile)))
+    if mem0_user_id is not None and str(mem0_user_id).strip():
+        tokens.append((mem0_user_id_var, mem0_user_id_var.set(str(mem0_user_id).strip())))
     if not tokens:
         return await fn(*args, **kwargs)
     try:
@@ -49,3 +57,15 @@ async def with_retrieval_context(
     finally:
         for var, tok in reversed(tokens):
             var.reset(tok)
+
+
+def get_last_search_health() -> dict[str, Any]:
+    """Return a copy of the current-task retrieval health dict."""
+    h = last_search_health_var.get()
+    return dict(h) if isinstance(h, dict) else {}
+
+
+def set_last_search_health(health: dict[str, Any]) -> None:
+    """Publish search health for the current task (and optional process fallback)."""
+    payload = dict(health) if isinstance(health, dict) else {}
+    last_search_health_var.set(payload)

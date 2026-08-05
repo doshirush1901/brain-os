@@ -1,5 +1,4 @@
 """Async handler functions for every skill in the SKILL_MATRIX.
-
 Each function accepts arbitrary keyword arguments and returns a status
 string.  The :func:`use_skill` dispatcher at the bottom of this module
 is the single entry-point used by agents.
@@ -142,27 +141,39 @@ async def compare_documents(**kwargs: Any) -> str:
 
 
 async def search_knowledge_base(**kwargs: Any) -> str:
+    from brain_os.agents.base.shared import _coerce_tool_limit, _coerce_tool_query
+
     retriever = _svc(SK.RETRIEVER)
-    query = kwargs.get("query", "")
+    query = _coerce_tool_query(kwargs.get("query", ""))
     if not query:
-        return "Error: 'query' argument required"
+        return "Error: 'query' argument required (non-empty string)"
     if not retriever:
         return "Knowledge base not available"
 
-    limit = kwargs.get("limit", 10)
-    category = kwargs.get("category")
+    limit = _coerce_tool_limit(kwargs.get("limit", 10))
+    category = _coerce_tool_query(kwargs.get("category") or "")
 
-    if category:
-        results = await retriever.search_by_category(query, category, limit=limit)
-    else:
-        results = await retriever.search(query, limit=limit)
+    try:
+        if category:
+            results = await retriever.search_by_category(query, category, limit=limit)
+        else:
+            results = await retriever.search(query, limit=limit)
+    except Exception as exc:
+        logger.warning("search_knowledge_base skill degraded (%s: %s)", type(exc).__name__, exc)
+        return f"No results found for: {query} (unavailable: {type(exc).__name__})"
 
     if not results:
         return f"No results found for: {query}"
 
     lines = [f"Found {len(results)} results for '{query}':"]
     for i, r in enumerate(results, 1):
-        lines.append(f"{i}. [{r.get('source', 'unknown')}] {r.get('content', '')[:300]}")
+        if not isinstance(r, dict):
+            continue
+        content = r.get("content", "")
+        content_s = content if isinstance(content, str) else str(content or "")
+        lines.append(f"{i}. [{r.get('source', 'unknown')}] {content_s[:300]}")
+    if len(lines) == 1:
+        return f"No results found for: {query}"
     return "\n".join(lines)
 
 
@@ -196,6 +207,7 @@ async def draft_outreach_email(**kwargs: Any) -> str:
     stage = kwargs.get("stage", "INTRO")
     region = kwargs.get("region", "")
     context_notes = kwargs.get("context", "")
+    tone_override = str(kwargs.get("tone") or "tim_urban").strip()
 
     retriever = _svc(SK.RETRIEVER)
     crm = _svc(SK.CRM)
@@ -224,28 +236,62 @@ async def draft_outreach_email(**kwargs: Any) -> str:
         )
         kb_context = "\n".join(r.get("content", "")[:300] for r in results)
 
-    regional_tones = {
-        "germany": "formal, precise, engineering-focused",
+    # Regional familiarity dials sit on top of the default Tim Urban outreach voice.
+    regional_dials = {
+        "germany": "precise, engineering-focused (DE+EN twin when relevant)",
         "india": "warm, relationship-first",
         "middle_east": "respectful, relationship-building",
-        "usa": "professional, results-oriented",
-        "europe": "professional, consultative",
+        "usa": "direct, low fluff",
+        "europe": "consultative, peer-level",
+        "canada": "permission-based CTA, shop-floor respect",
+        "mexico": "ES+EN twin when relevant",
     }
-    tone = regional_tones.get(region.lower(), "professional, consultative")
+    regional = regional_dials.get(region.lower(), "peer-level plant manager")
+    tim_urban = ""
+    try:
+        from brain_os.services.founder_voice import load_outreach_tim_urban_voice
 
-    return await _llm_call(
+        tim_urban = load_outreach_tim_urban_voice()
+    except Exception:
+        tim_urban = ""
+
+    raw = await _llm_call(
         "You are a B2B sales email specialist for Acme Corp, an industrial "
-        "industrial forming machine manufacturer. Write compelling, personalised "
-        "outreach emails that demonstrate domain expertise.",
+        "industrial forming machine manufacturer. Default outreach tone is Tim Urban / "
+        "Wait But Why (curious, idea-staircase, one analogy max, B2B-safe). "
+        "Never name that style to the customer. Plain text only.",
         f"Draft a {stage} stage outreach email.\n\n"
         f"Recipient: {contact_email or 'unknown'}\n"
         f"Company: {company or 'unknown'}\n"
-        f"Regional tone: {tone}\n"
+        f"Tone request: {tone_override}\n"
+        f"Regional dial (on top of Tim Urban): {regional}\n"
         f"Additional context: {context_notes}\n\n"
+        f"<<<OUTREACH_VOICE_TIM_URBAN>>>\n{tim_urban}\n<<<END_OUTREACH_VOICE_TIM_URBAN>>>\n\n"
         f"CRM data:\n{crm_context or '(none)'}\n\n"
         f"Reference material:\n{kb_context or '(none)'}",
         temperature=0.5,
     )
+    # Lint/finalize only — avoid gate_composed_outbound (employment chain → interfaces).
+    from brain_os.services.outbound_voice_finalize import finalize_outbound_draft, parse_subject_body
+
+    subj, body = parse_subject_body(str(raw or ""), fallback_subject="")
+    finalized = await finalize_outbound_draft(
+        subject=subj,
+        body=body or str(raw or ""),
+        rewrite=True,
+        purpose=str(stage or "cold"),
+    )
+    chrome = str(finalized.get("status_line") or "")
+    out_body = str(finalized.get("body") or body)
+    out_subj = str(finalized.get("subject") or subj)
+    header = f"SUBJECT: {out_subj}\nBODY:\n{out_body}" if out_subj else out_body
+    if not finalized.get("send_ready"):
+        return (
+            f"Draft blocked (lint_failed).\n{chrome}\n\n--- preview (not send-ready) ---\n{header}"
+        )
+    if chrome:
+        return f"{header}\n\n---\n{chrome}"
+    return header
 
 
 async def qualify_lead(**kwargs: Any) -> str:
@@ -381,47 +427,114 @@ async def forecast_pipeline(**kwargs: Any) -> str:
     if quotes_mgr:
         analytics = await quotes_mgr.get_quote_analytics()
 
-    return json.dumps(
-        {
-            "pipeline_summary": summary,
-            "quote_analytics": analytics,
-        },
-        default=str,
-        indent=2,
-    )
+    weighted_forecast: dict[str, Any] | None = None
+    try:
+        from brain_os.services.pipeline_forecast import build_pipeline_forecast
+
+        weighted_forecast = await build_pipeline_forecast(crm, persist=True)
+    except Exception:
+        logger.debug("forecast_pipeline: build_pipeline_forecast unavailable", exc_info=True)
+
+    payload: dict[str, Any] = {
+        "pipeline_summary": summary,
+        "quote_analytics": analytics,
+    }
+    if weighted_forecast is not None:
+        payload["weighted_forecast"] = weighted_forecast
+    return json.dumps(payload, default=str, indent=2)
 
 
 async def generate_invoice(**kwargs: Any) -> str:
+    """Generate commercial PI/tax invoice → invoices row + PDF in WO folder.
+
+    Preferred kwargs: ``wo`` / ``wo_number``, ``milestone_seq`` or ``milestone_id``.
+    Legacy kwargs (``customer``, ``quote_id``, ``items``) still accepted; when
+    ``wo`` is missing, returns an error pointing operators at the WO path.
+    Sending remains via normal outbound gates; call mark_invoice_sent after ledger.
+    """
+    import json
+
+    wo_ref = (
+        kwargs.get("wo")
+        or kwargs.get("wo_number")
+        or kwargs.get("work_order")
+        or kwargs.get("work_order_id")
+        or ""
+    )
     customer = kwargs.get("customer", "")
     quote_id = kwargs.get("quote_id", "")
-    items = kwargs.get("items", [])
+    milestone_seq = kwargs.get("milestone_seq")
+    milestone_id = kwargs.get("milestone_id")
+    kind = kwargs.get("kind") or "proforma"
+    series_key = kwargs.get("series_key")
 
-    if not customer:
-        return "Error: 'customer' argument required"
+    if not wo_ref and quote_id:
+        # Resolve WO by quote when possible
+        crm = _svc(SK.CRM)
+        if crm is not None:
+            try:
+                from sqlalchemy import select
 
-    retriever = _svc(SK.RETRIEVER)
-    kb_context = ""
-    if retriever and quote_id:
-        results = await retriever.search(f"quote {quote_id} {customer}", limit=5)
-        kb_context = "\n".join(r.get("content", "")[:400] for r in results)
+                from brain_os.data.work_orders import WorkOrderModel
 
-    items_text = ""
-    if items:
-        items_text = "\n".join(
-            f"  - {it.get('description', '?')}: {it.get('amount', '?')} {it.get('currency', 'USD')}"
-            for it in items
+                async with crm.session_factory() as session:
+                    row = await session.scalar(
+                        select(WorkOrderModel).where(WorkOrderModel.quote_id == str(quote_id))
+                    )
+                    if row:
+                        wo_ref = row.wo_number
+            except Exception:
+                pass
+
+    if not wo_ref and customer:
+        crm = _svc(SK.CRM)
+        if crm is not None:
+            try:
+                from sqlalchemy import select
+
+                from brain_os.data.work_orders import WorkOrderModel
+
+                async with crm.session_factory() as session:
+                    row = await session.scalar(
+                        select(WorkOrderModel)
+                        .where(WorkOrderModel.customer_name.ilike(f"%{customer}%"))
+                        .order_by(WorkOrderModel.created_at.desc())
+                    )
+                    if row:
+                        wo_ref = row.wo_number
+            except Exception:
+                pass
+
+    if not wo_ref:
+        return (
+            "Error: work order required for invoice registry. "
+            "Pass wo=26002 (and optional milestone_seq=1). "
+            "Legacy markdown-only invoices are retired — Tally remains bookkeeping."
         )
 
-    return await _llm_call(
-        "You are a finance specialist at Acme Corp. Generate a professional "
-        "invoice document in markdown format with proper line items, taxes, "
-        "payment terms, and bank details placeholder.",
-        f"Generate an invoice for:\n"
-        f"Customer: {customer}\n"
-        f"Quote reference: {quote_id or 'N/A'}\n"
-        f"Line items:\n{items_text or '(derive from quote data)'}\n\n"
-        f"Quote/order data:\n{kb_context or '(none)'}",
-    )
+    from brain_os.data.crm import CRMDatabase
+    from brain_os.services.invoice_service import InvoiceService
+
+    crm = _svc(SK.CRM) or CRMDatabase()
+    svc = InvoiceService(crm.session_factory)
+    try:
+        seq = int(milestone_seq) if milestone_seq not in (None, "") else None
+    except (TypeError, ValueError):
+        seq = None
+    try:
+        result = await svc.generate_for_milestone(
+            wo_ref=str(wo_ref),
+            milestone_id=str(milestone_id) if milestone_id else None,
+            milestone_seq=seq,
+            kind=str(kind),
+            series_key=str(series_key) if series_key else None,
+        )
+    except LookupError as exc:
+        return f"Error: {exc}"
+    except Exception as exc:
+        return f"Error generating invoice: {exc}"
+
+    return json.dumps(result, indent=2, default=str)
 
 
 # ── Marketing & Campaigns ────────────────────────────────────────────────
@@ -506,91 +619,69 @@ async def build_lead_report(**kwargs: Any) -> str:
 
 
 async def data_pulling_from_email_past_conversations(**kwargs: Any) -> str:
-    """Run pull_contact_email_history and download_email_attachments for a contact.
-    Requires: email, folder. Optional: output_path, analyze, store_memory, to_send_path, name."""
-    import asyncio
+    """Pull Gmail history + PDFs for a contact via EmailProcessor (in-process).
+
+    Requires: email, folder. Optional: output_path, analyze, store_memory, name.
+    """
     from pathlib import Path
+
+    from brain_os.services.contact_email_pull import pull_contact_email_workflow
 
     email = kwargs.get("email", "").strip()
     folder = kwargs.get("folder", "").strip()
     if not email or not folder:
         return "Error: 'email' and 'folder' arguments required (e.g. folder=demo_buyer_acme)"
 
+    ep = _svc(SK.EMAIL_PROCESSOR)
+    if ep is None:
+        return "Error: Gmail EmailProcessor not available (start Brain OS with OAuth configured)"
+
     project_root = Path(__file__).resolve().parent.parent.parent.parent
-    output_path = kwargs.get("output_path") or str(
-        project_root / "data" / "imports" / "24_WebSite_Leads" / f"{folder}_email_history.md"
-    )
+    output_raw = kwargs.get("output_path")
+    output_path = Path(output_raw) if output_raw else None
     analyze = kwargs.get("analyze", True)
     store_memory = kwargs.get("store_memory", False)
-    to_send_path = kwargs.get("to_send_path", "")
     contact_name = kwargs.get("name", "")
 
-    results = []
+    async def _summarize(addr: str, thread_digest: str) -> str:
+        return await _llm_call(
+            "You summarize B2B sales email history for a industrial forming machinery OEM.",
+            (
+                f"Contact: {contact_name or addr}\n"
+                "Write 2-4 sentences: relationship arc, machines/prices discussed, "
+                "last status, and what to say next. Plain prose.\n\n"
+                f"{thread_digest}"
+            ),
+            temperature=0.2,
+        )
 
-    # 1. Pull contact email history
-    pull_cmd = [
-        "poetry",
-        "run",
-        "python",
-        str(project_root / "scripts" / "pull_contact_email_history.py"),
-        "--email",
-        email,
-        "--output",
-        output_path,
-    ]
-    if store_memory:
-        pull_cmd.append("--store-memory")
-    pull_cmd.append("--summarize")
-    if contact_name:
-        pull_cmd.extend(["--name", contact_name])
+    async def _memory_store(content: str, metadata: dict[str, Any]) -> None:
+        mem = _svc(SK.LONG_TERM_MEMORY)
+        if mem is None:
+            raise RuntimeError("long_term_memory service not bound")
+        meta = dict(metadata or {})
+        meta.setdefault("memory_category", "relationship")
+        meta.setdefault("type", "relationship")
+        await mem.store_gated(
+            content,
+            user_id="global",
+            metadata=meta,
+            source=str(meta.get("source", "contact_email_pull")),
+            category=str(meta.get("memory_category") or "relationship"),
+        )
 
-    proc = await asyncio.create_subprocess_exec(
-        *pull_cmd,
-        cwd=str(project_root),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+    return await pull_contact_email_workflow(
+        ep,
+        email=email,
+        folder=folder,
+        project_root=project_root,
+        output_path=output_path,
+        contact_name=contact_name,
+        analyze=bool(analyze),
+        store_memory=bool(store_memory),
+        summarize_fn=_summarize,
+        memory_store_fn=_memory_store if store_memory else None,
     )
-    stdout, stderr = await proc.communicate()
-    if proc.returncode != 0:
-        results.append(f"Pull history failed (exit {proc.returncode}): {stderr.decode()[:500]}")
-    else:
-        results.append(f"Pull history OK: {output_path}")
-
-    # 2. Download PDF attachments
-    download_cmd = [
-        "poetry",
-        "run",
-        "python",
-        str(project_root / "scripts" / "download_email_attachments.py"),
-        "--email",
-        email,
-        "--folder",
-        folder,
-    ]
-    if analyze:
-        download_cmd.append("--analyze")
-    if store_memory:
-        download_cmd.append("--memory")
-    if to_send_path:
-        download_cmd.extend(["--to-send", to_send_path])
-    if contact_name:
-        download_cmd.extend(["--name", contact_name])
-
-    proc2 = await asyncio.create_subprocess_exec(
-        *download_cmd,
-        cwd=str(project_root),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout2, stderr2 = await proc2.communicate()
-    if proc2.returncode != 0:
-        results.append(f"Download PDFs failed (exit {proc2.returncode}): {stderr2.decode()[:500]}")
-    else:
-        results.append("Download PDFs OK: examples/acme/docs/downloaded_from_emails/" + folder + "/")
-        if stdout2:
-            results.append(stdout2.decode()[-800:])
-
-    return "\n".join(results)
 
 
 async def schedule_campaign(**kwargs: Any) -> str:
@@ -685,7 +776,7 @@ async def draft_proposal(**kwargs: Any) -> str:
 
 async def polish_text(**kwargs: Any) -> str:
     text = kwargs.get("text", "")
-    tone = kwargs.get("tone", "professional")
+    tone = kwargs.get("tone", "tim_urban")
     if not text:
         return "Error: 'text' argument required"
 

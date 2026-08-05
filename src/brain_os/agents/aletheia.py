@@ -198,6 +198,17 @@ class Aletheia(BaseAgent):
         content_preview = best.get("content", "")[:200]
         return f"VERIFIED: '{claim}' → source: {source} (score: {best.get('score', 0):.2f})\n  Evidence: {content_preview}"
 
+    async def _tool_verify_sources(self, response_text: str) -> str:
+        result = await self.check_provenance(response_text)
+        lines = [
+            f"Provenance verdict: {result['verdict']} ({result['claims_checked']} claims checked)"
+        ]
+        if result.get("verified"):
+            lines.append(f"Verified: {', '.join(result['verified'][:5])}")
+        if result.get("unverifiable"):
+            lines.append(f"Unverifiable: {', '.join(result['unverifiable'][:5])}")
+        return "\n".join(lines)
+
 
 def _claim_likely_computational(claim: str) -> bool:
     """Heuristic: numeric/unit claims often satisfied by Wolfram teacher attribution."""
@@ -210,14 +221,3 @@ def _claim_likely_computational(claim: str) -> bool:
             low,
         )
     )
-
-    async def _tool_verify_sources(self, response_text: str) -> str:
-        result = await self.check_provenance(response_text)
-        lines = [
-            f"Provenance verdict: {result['verdict']} ({result['claims_checked']} claims checked)"
-        ]
-        if result.get("verified"):
-            lines.append(f"Verified: {', '.join(result['verified'][:5])}")
-        if result.get("unverifiable"):
-            lines.append(f"Unverifiable: {', '.join(result['unverifiable'][:5])}")
-        return "\n".join(lines)

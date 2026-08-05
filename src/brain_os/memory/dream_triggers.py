@@ -26,7 +26,7 @@ def read_triggers() -> dict[str, Any]:
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
-    except Exception as exc:
+    except Exception:
         logger.debug("dream_triggers read failed", exc_info=True)
         return {}
 
@@ -65,7 +65,7 @@ def bump_event(event: str, delta: int = 1, *, ttl_hours: int = 168) -> None:
         blob["updated_at"] = now.isoformat()
         try:
             _write_triggers(blob)
-        except Exception as exc:
+        except Exception:
             logger.warning("dream_triggers write failed", exc_info=True)
 
 

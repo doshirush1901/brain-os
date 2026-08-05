@@ -48,6 +48,8 @@ _pipeline: Any = None
 _retriever: Any = None
 _crm: Any = None
 _ingestor: Any = None
+#: Held for process lifetime when full data-dir lock is acquired on MCP init.
+_mcp_data_dir_lock_cm: Any = None
 _long_term_memory: Any = None
 _conversation_memory: Any = None
 _relationship_memory: Any = None
@@ -284,7 +286,7 @@ async def _ensure_initialized() -> None:
     global _pantheon, _shared_services, _pipeline, _retriever, _crm, _ingestor
     global _long_term_memory, _conversation_memory, _relationship_memory
     global _goal_manager, _knowledge_graph, _email_processor, _tinder_email_mode
-    global _task_orchestrator, _agent_loop, _initialized
+    global _task_orchestrator, _agent_loop, _initialized, _mcp_data_dir_lock_cm
     if _initialized:
         return
 
@@ -308,7 +310,27 @@ async def _ensure_initialized() -> None:
         if _initialized:
             return
 
-        from brain_os.interfaces.cli_runtime import _build_pantheon, _build_pipeline
+        from brain_os.systems.data_dir_lock import (
+            async_data_dir_lock,
+            should_acquire_full_data_dir_lock,
+        )
+
+        if should_acquire_full_data_dir_lock() and _mcp_data_dir_lock_cm is None:
+            _mcp_data_dir_lock_cm = async_data_dir_lock(timeout=5.0)
+            try:
+                await _mcp_data_dir_lock_cm.__aenter__()
+                logger.info("MCP acquired exclusive data-dir lock")
+            except RuntimeError:
+                logger.warning(
+                    "MCP could not acquire exclusive data-dir lock (another Brain OS process "
+                    "holds it) — continuing without lock; prefer sharing the API process "
+                    "or enable APP__DATA_DIR_LOCK_NARROW after Wave-1 dual-write cutover"
+                )
+                _mcp_data_dir_lock_cm = None
+        elif not should_acquire_full_data_dir_lock():
+            logger.info("data_dir_lock_narrow=true — MCP skipping exclusive data-dir lock")
+
+        from brain_os.runtime.cli_runtime import _build_pantheon, _build_pipeline
         from brain_os.service_keys import ServiceKey as SK
 
         _pantheon, _shared_services = _build_pantheon()
@@ -384,11 +406,15 @@ async def _ensure_initialized() -> None:
 
 
 def _model_to_dict(obj: Any) -> dict[str, Any]:
-    """Convert a SQLAlchemy model or Pydantic model to a JSON-safe dict."""
+    """Convert a SQLAlchemy model, CRMRecord, or Pydantic model to a JSON-safe dict."""
+    if hasattr(obj, "to_dict") and callable(obj.to_dict):
+        return obj.to_dict()
     if hasattr(obj, "model_dump"):
         return obj.model_dump()
     if hasattr(obj, "__dict__"):
         return {k: v for k, v in obj.__dict__.items() if not k.startswith("_")}
+    if isinstance(obj, dict):
+        return obj
     return {"value": str(obj)}
 
 

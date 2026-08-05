@@ -370,7 +370,7 @@ class Nemesis(BaseAgent):
             )
             if parsed.get("old_value"):
                 content += f" (previously stated as: {parsed['old_value']})"
-            await long_term.store(
+            await long_term.store_gated(
                 content,
                 user_id="global",
                 metadata={
@@ -379,7 +379,11 @@ class Nemesis(BaseAgent):
                     "category": category.value,
                     "severity": severity.value,
                     "correction_id": correction_id,
+                    "memory_category": "correction",
                 },
+                source="nemesis:correction",
+                category="correction",
+                bypass_salience=True,
             )
 
         return (

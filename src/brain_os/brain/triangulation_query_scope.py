@@ -45,6 +45,11 @@ _ABOUT_COMPANY_RE = re.compile(
     r"([A-Z][\w][\w\s&.-]{1,79}?)"
     r"(?:\s+as\s+(?:a\s+)?lead|[?.!,]|$)",
 )
+_SHAPE_COMPANY_RE = re.compile(
+    r"Pipeline\s+task:\s*Shape\s+the\s+(.+?)\s+(?:July|email|dates)\b",
+    re.IGNORECASE,
+)
+_APPROVED_COPY_SPLIT = re.compile(r"\bApproved\s+copy\s*:", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -71,14 +76,25 @@ def extract_company_and_contact(
 ) -> tuple[str | None, str | None]:
     """Best-effort company and email from query text."""
     text = (query or "").strip()
-    email_m = _EMAIL_RE.search(text)
+    header = text
+    approved_split = _APPROVED_COPY_SPLIT.search(text)
+    if approved_split:
+        header = text[: approved_split.start()]
+
     contact: str | None = None
     company: str | None = None
+
+    shape_m = _SHAPE_COMPANY_RE.search(header)
+    if shape_m:
+        company = shape_m.group(1).strip().rstrip(".,;")
+
+    email_m = _EMAIL_RE.search(header)
     if email_m:
         contact = email_m.group(0).lower()
-        dom = contact.split("@", 1)[-1]
-        if dom and not dom.endswith(("gmail.com", "yahoo.com", "hotmail.com", "outlook.com")):
-            company = _domain_to_company_hint(dom)
+        if not company:
+            dom = contact.split("@", 1)[-1]
+            if dom and not dom.endswith(("gmail.com", "yahoo.com", "hotmail.com", "outlook.com")):
+                company = _domain_to_company_hint(dom)
 
     qm = _QUOTED_RE.search(text)
     if qm:

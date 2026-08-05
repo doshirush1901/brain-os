@@ -36,6 +36,7 @@ from brain_os.pipeline_phases.execute import apply_execute_trace_telemetry, run_
 from brain_os.pipeline_phases.outreach import (
     extract_json_payload,
     get_email_processor,
+    prefetch_gmail_thread_by_id,
     prefetch_outreach_thread_evidence,
     render_outreach_ranking,
 )
@@ -150,7 +151,6 @@ async def run_process_request_inner(
         meta=meta,
         app_meta=_app_meta,
     )
-    pending = _dedup_state.pending
     _now = _dedup_state.now
     _fingerprint = _dedup_state.fingerprint
     _redis_dedup_key = _dedup_state.redis_key
@@ -182,8 +182,6 @@ async def run_process_request_inner(
         except Exception:
             logger.debug("reset_boredom failed", exc_info=True)
 
-    history: list[dict[str, Any]] = []
-    cross_channel_history: list[dict[str, Any]] = []
     _history_summary = ""
     active_goal = None
     perception: dict[str, Any]
@@ -214,8 +212,6 @@ async def run_process_request_inner(
         contact_email = _resume_preamble.contact_email
         perception = _resume_preamble.perception
         contact_info = perception["resolved_contact"]
-        history = _resume_preamble.history
-        cross_channel_history = _resume_preamble.cross_channel_history
         _history_summary = _resume_preamble.history_summary
         active_goal = _resume_preamble.active_goal
         resolved_input = _resume_preamble.resolved_input
@@ -268,8 +264,6 @@ async def run_process_request_inner(
             record_stage_fn=_record_stage,
             on_progress=on_progress,
         )
-        history = _remember_out.history
-        cross_channel_history = _remember_out.cross_channel_history
         _history_summary = _remember_out.history_summary
         active_goal = _remember_out.active_goal
         resolved_input = _remember_out.resolved_input
@@ -359,6 +353,10 @@ async def run_process_request_inner(
                 ts_start=ts_wall_start,
                 logger=logger,
                 sphinx_timeout_s=15,
+                pantheon=pipeline._pantheon,
+                crm=pipeline._crm,
+                knowledge_graph=pipeline._graph,
+                email_processor=get_email_processor(pipeline._pantheon),
             )
             if _sphinx_early is not None:
                 return _sphinx_early
@@ -368,6 +366,7 @@ async def run_process_request_inner(
         _route_preamble = await resolve_route_with_trace(
             router=pipeline._router,
             resolved_input=resolved_input,
+            raw_input=raw_input,
             bypass_cheap_exits=_bypass_cheap_exits,
             procedural_memory=pipeline._procedural,
             maybe_router_embedding_tiebreak_fn=pipeline._maybe_router_embedding_tiebreak,
@@ -397,6 +396,67 @@ async def run_process_request_inner(
                 logger=logger,
             )
         )
+        _shape_gate_prefixes: list[str] = []
+        if _route_preamble.get("pipeline_shape_task"):
+            email_scope = "no_email"
+            trace["pipeline_shape_task"] = True
+            trace["fast_path"] = "pipeline_shape"
+            from brain_os.pipeline_phases.pipeline_shape_gate import (
+                run_pipeline_shape_triangulation_gate,
+            )
+
+            (
+                _shape_blocked,
+                _shape_gate_prefixes,
+                _shape_tri,
+            ) = await run_pipeline_shape_triangulation_gate(
+                resolved_input=resolved_input,
+                meta=meta,
+                pantheon=pipeline._pantheon,
+                email_processor=get_email_processor(pipeline._pantheon),
+            )
+            if _shape_tri is not None:
+                trace["shape_triangulation_allowed"] = _shape_tri.allowed
+                trace["shape_triangulation_gaps"] = list(_shape_tri.gap_keys)
+            if _shape_blocked and _shape_gate_prefixes:
+                _block_msg = _shape_gate_prefixes[0]
+                trace["early_exit"] = "shape_triangulation_gate"
+                trace["agents"] = ["triangulation"]
+                pipeline._attach_pipeline_trace(meta, trace)
+                from brain_os.pipeline_phases.compile import schedule_exit_run_record
+
+                schedule_exit_run_record(
+                    meta=meta,
+                    run_id=run_id,
+                    channel=channel,
+                    sender_id=sender_id,
+                    ts_start=ts_wall_start,
+                    trace=trace,
+                    agents_used=["triangulation"],
+                    raw_input=raw_input,
+                    response_text=_block_msg,
+                )
+                from brain_os.brain.graphe_instrumentation import log_graphe_pipeline_turn
+
+                await log_graphe_pipeline_turn(
+                    pipeline._pantheon,
+                    query=raw_input,
+                    agents_used=["triangulation"],
+                    raw_response=_block_msg,
+                    run_id=run_id,
+                    channel=channel,
+                    route_method=route_method,
+                    contact_email=contact_email,
+                    email_scope=email_scope,
+                    started_at=t0,
+                    early_exit="shape_triangulation_gate",
+                )
+                return _block_msg, ["triangulation"], run_id
+        elif _route_preamble.get("gmail_thread_read_only"):
+            email_scope = "live_email"
+            trace["gmail_thread_read_only"] = True
+            trace["gmail_thread_ids"] = list(_route_preamble.get("gmail_thread_ids") or [])
+            trace["fast_path"] = "gmail_thread_read"
         prefetched_tool_audit: list[dict[str, Any]] = []
 
         # ── 5.5 ENRICH CONTEXT ─────────────────────────────────────
@@ -426,6 +486,12 @@ async def run_process_request_inner(
                 thread_id_pattern=pipeline._THREAD_ID_PATTERN,
                 logger=logger,
             ),
+            prefetch_gmail_thread_by_id_fn=lambda ids: prefetch_gmail_thread_by_id(
+                ids,
+                email_processor=get_email_processor(pipeline._pantheon),
+                crm=pipeline._crm,
+            ),
+            gmail_thread_ids=list(_route_preamble.get("gmail_thread_ids") or []),
             logger=logger,
             memory_blocks=pipeline._memory_blocks,
             relationship_memory=pipeline._relationship,
@@ -440,6 +506,9 @@ async def run_process_request_inner(
                 f"{_clarification_pipeline_resume.get('clarification_answer', '')}"
             )
             enrichment_parts = [_clarification_note, *list(enrichment_parts)]
+
+        if _shape_gate_prefixes:
+            enrichment_parts = [*list(_shape_gate_prefixes), *list(enrichment_parts)]
 
         _record_stage("enrich")
 
@@ -467,7 +536,12 @@ async def run_process_request_inner(
             tool_discovery_meta=tool_discovery_meta,
             agent_journal=pipeline._agent_journal,
             memory_block_store=pipeline._memory_blocks,
+            gmail_thread_read_only=bool(_route_preamble.get("gmail_thread_read_only")),
+            gmail_thread_ids=list(_route_preamble.get("gmail_thread_ids") or []),
         )
+        if _route_preamble.get("route_intent"):
+            context["route_intent"] = str(_route_preamble["route_intent"])
+        context["route_method"] = route_method
         apply_llm_provider_overrides(
             context=context,
             resolved_input=resolved_input,
@@ -701,6 +775,7 @@ async def run_process_request_inner(
             raw_response=raw_response,
             had_provenance_warning=_learning_had_provenance,
             had_dlp_flag=_learning_had_dlp,
+            route_method=route_method,
         )
 
         # ── 9.6 LOG SESSION (Graphe) ─────────────────────────────────

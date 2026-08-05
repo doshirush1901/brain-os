@@ -2,7 +2,7 @@
 
 PUBLIC DEMO DATA — fully synthetic. This walkthrough uses **Northwind Components** as the anchor account.
 
-Goal: feel how an Brain OS-class operator combines **CRM + knowledge base + triangulation** before you fork for your company.
+Goal: feel how a Brain OS-class operator combines **CRM + knowledge base + triangulation** before you fork for your company.
 
 ## Prerequisites
 

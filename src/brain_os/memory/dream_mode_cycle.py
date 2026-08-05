@@ -1,4 +1,7 @@
-"""Dream cycle stage orchestration and timeout helpers (Phase 9 split)."""
+"""Dream cycle stage orchestration and timeout helpers (Phase 9 split).
+
+Stage order is mirrored in ``dream_stage_index.DREAM_STAGE_EXECUTION_ORDER``.
+"""
 
 from __future__ import annotations
 
@@ -15,6 +18,16 @@ if TYPE_CHECKING:
     from brain_os.memory.dream_mode import DreamMode
 
 logger = logging.getLogger(__name__)
+
+_DREAM_REPORT_WRITE_ERRORS = (
+    OSError,
+    RuntimeError,
+    ValueError,
+    TypeError,
+    AttributeError,
+    KeyError,
+    ImportError,
+)
 
 
 async def _run_stage12_with_timeout(
@@ -85,6 +98,9 @@ async def execute_dream_cycle(dream: DreamMode, *, journal_last_24h: bool = Fals
     episodes, memories_consolidated = await dream._stage2_episodic_consolidation(
         interactions, stage_log
     )
+    await dream._stage2_1_episode_hygiene(stage_log)
+    await dream._stage2_2_sleep_curation(stage_log)
+    await dream._stage2_5_mem0_replay(stage_log)
     dream._save_checkpoint(cycle_date=cycle_date, status="running", stage_log=stage_log)
 
     insights, gaps, connections, campaign_insights = await dream._stage3_insight_generation(
@@ -94,13 +110,29 @@ async def execute_dream_cycle(dream: DreamMode, *, journal_last_24h: bool = Fals
     await dream._stage3e_gap_resolution(gaps, stage_log)
     dream._save_checkpoint(cycle_date=cycle_date, status="running", stage_log=stage_log)
 
+    await dream._stage3f_revenue_reflection(stage_log)
+    dream._save_checkpoint(cycle_date=cycle_date, status="running", stage_log=stage_log)
+
+    await dream._stage3g_forced_collisions(stage_log)
+    dream._save_checkpoint(cycle_date=cycle_date, status="running", stage_log=stage_log)
+
+    await dream._stage3h_aftermarket_reflection(stage_log)
+    dream._save_checkpoint(cycle_date=cycle_date, status="running", stage_log=stage_log)
+
     await dream._stage3_6_prediction_reconciliation(stage_log)
+    dream._save_checkpoint(cycle_date=cycle_date, status="running", stage_log=stage_log)
+
+    await dream._stage3i_memory_reconciliation(episodes, insights, stage_log)
     dream._save_checkpoint(cycle_date=cycle_date, status="running", stage_log=stage_log)
 
     await dream._stage4_procedural_learning(insights, episodes, stage_log)
     await dream._refresh_skills_index(stage_log)
 
     await dream._stage5_memory_pruning(stage_log)
+
+    await dream._stage5b_mem0_forgetting(stage_log)
+
+    await dream._stage5c_qdrant_vector_hygiene(stage_log)
 
     price_conflicts = await _run_stage_with_timeout(
         stage_log,
@@ -171,6 +203,15 @@ async def execute_dream_cycle(dream: DreamMode, *, journal_last_24h: bool = Fals
     await _run_stage12_with_timeout(
         dream,
         stage_log,
+        "12g_instinct_evolve",
+        "Stage 12g (instinct evolve)",
+        dream._stage12g_instinct_evolve,
+    )
+    dream._save_checkpoint(cycle_date=cycle_date, status="running", stage_log=stage_log)
+
+    await _run_stage12_with_timeout(
+        dream,
+        stage_log,
         "12b_curator_lite",
         "Stage 12b (curator-lite)",
         dream._stage12b_curator_lite,
@@ -197,8 +238,23 @@ async def execute_dream_cycle(dream: DreamMode, *, journal_last_24h: bool = Fals
         stage_results=stage_results,
     )
 
+    stage_log["stages"]["11b_operator_reflection"] = await _run_stage_with_timeout(
+        stage_log,
+        "11b_operator_reflection",
+        "Stage 11b (operator nightly reflection)",
+        lambda: dream._stage11b_operator_reflection(stage_log, report),
+        default={"status": "skipped"},
+    )
+
     await dream._persist_report(report)
     await asyncio.to_thread(dream._write_dream_log, stage_log, report)
+
+    try:
+        from brain_os.memory.dream_report_writer import write_dream_report
+
+        await asyncio.to_thread(write_dream_report, stage_log, report)
+    except _DREAM_REPORT_WRITE_ERRORS:
+        logger.exception("Dream report write failed (non-fatal)")
     dream._save_checkpoint(cycle_date=cycle_date, status="completed", stage_log=stage_log)
 
     logger.info(

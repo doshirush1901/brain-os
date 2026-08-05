@@ -10,7 +10,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from brain_os.interfaces.cli_runtime import _configure_logging
+from brain_os.runtime.cli_runtime import _configure_logging
 from brain_os.service_keys import ServiceKey as SK
 from brain_os.services.brain_daily_dashboard import (
     build_and_persist_daily_snapshot,
@@ -35,7 +35,7 @@ operator_app.add_typer(dashboard_app, name="dashboard")
 
 
 def _shared_services() -> tuple[Any, Any, Any]:
-    from brain_os.interfaces.cli_runtime import _build_pantheon
+    from brain_os.runtime.cli_runtime import _build_pantheon
 
     _, shared = _build_pantheon()
     outbound = shared.get(SK.OUTBOUND_APPROVALS)
@@ -53,11 +53,21 @@ def _shared_services() -> tuple[Any, Any, Any]:
 @operator_app.command("inbox")
 def operator_inbox_cmd(
     json_output: bool = typer.Option(False, "--json", help="Print JSON payload."),
+    with_quotes: bool = typer.Option(
+        False, "--with-quotes", help="Also load Postgres DRAFT quotes (slower; needs PG)."
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """List pending outbound emails, lead reviews, and quote drafts."""
     _configure_logging(verbose)
-    outbound, email, quotes = _shared_services()
+    from brain_os.systems.outbound_approvals import OutboundApprovalService
+
+    outbound = OutboundApprovalService(
+        storage_path=get_data_dir() / "operations" / "outbound_approvals.json",
+    )
+    quotes = None
+    if with_quotes:
+        _, _, quotes = _shared_services()
     tinder = TinderEmailModeService(data_root=get_data_dir())
     inbox = OperatorInboxService()
 
@@ -66,6 +76,7 @@ def operator_inbox_cmd(
             outbound_approvals=outbound,
             quotes=quotes,
             tinder_service=tinder,
+            include_quotes=with_quotes,
         )
         return payload.model_dump()
 
@@ -75,23 +86,30 @@ def operator_inbox_cmd(
         return
 
     summary = payload.get("summary") or {}
+    producers = summary.get("producer_types") or []
     console.print(
         f"[bold]Operator inbox[/bold] — "
+        f"{summary.get('total', 0)} total · "
         f"{summary.get('outbound_email', 0)} outbound · "
-        f"{summary.get('lead_review', 0)} leads · "
-        f"{summary.get('quote_draft', 0)} quotes · "
-        f"{summary.get('external_pending', 0)} external pending"
+        f"{summary.get('onshoring_pack', 0)} onshoring · "
+        f"{summary.get('external_pending', 0)} external · "
+        f"producers={','.join(producers[:8]) or '—'}"
     )
+    console.print("[dim]Verdicts: ira ok <id> · ira no <id> [reason][/dim]")
     table = Table()
     table.add_column("Id", style="cyan", max_width=28)
-    table.add_column("Kind")
-    table.add_column("Title", max_width=48)
+    table.add_column("Age")
+    table.add_column("Producer", max_width=14)
+    table.add_column("Kind", max_width=16)
+    table.add_column("Title", max_width=40)
     table.add_column("Risk")
     for row in payload.get("items") or []:
         table.add_row(
             str(row.get("id") or ""),
+            str(row.get("age_badge") or "?"),
+            str(row.get("producer") or "")[:14],
             str(row.get("kind") or ""),
-            str(row.get("title") or "")[:48],
+            str(row.get("title") or "")[:40],
             str(row.get("risk") or ""),
         )
     console.print(table)
@@ -109,6 +127,32 @@ def operator_inbox_cmd(
                 f"  {h.get('company_name', '')} — priority={h.get('action_priority')} "
                 f"({h.get('next_action', '')})"
             )
+
+
+@operator_app.command("hygiene")
+def operator_hygiene_cmd(
+    stale_days: int = typer.Option(14, "--stale-days", help="Expire drafts older than N days."),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    skip_tinder: bool = typer.Option(False, "--skip-tinder"),
+    json_output: bool = typer.Option(False, "--json"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Expire stale drafts (>14d) and unfreeze a stuck Tinder checkpoint."""
+    _configure_logging(verbose)
+    from brain_os.services.operator_approval_hygiene import (
+        expire_stale_drafts,
+        unfreeze_tinder_checkpoint,
+    )
+
+    stale = expire_stale_drafts(days=stale_days, dry_run=dry_run)
+    tinder = {"skipped": True} if skip_tinder else unfreeze_tinder_checkpoint(dry_run=dry_run)
+    payload = {"stale_drafts": stale, "tinder": tinder}
+    if json_output:
+        print(json.dumps(payload, ensure_ascii=False), flush=True)
+        return
+    console.print(stale.get("brief_note") or "stale ok")
+    if not skip_tinder:
+        console.print(tinder.get("brief_note") or "tinder ok")
 
 
 @operator_app.command("decide")
@@ -130,11 +174,25 @@ def operator_decide_cmd(
         err_console.print("[red]decision must be approve, reject, or snooze[/red]")
         raise typer.Exit(1)
 
-    outbound, email, quotes = _shared_services()
+    # Fast path: reject/snooze never needs Pantheon; approve may need email only.
+    outbound = email = quotes = None
     tinder = TinderEmailModeService(data_root=get_data_dir())
+    if dec == "approve":
+        outbound, email, quotes = _shared_services()
+    else:
+        from brain_os.systems.outbound_approvals import OutboundApprovalService
+
+        outbound = OutboundApprovalService(
+            storage_path=get_data_dir() / "operations" / "outbound_approvals.json",
+        )
     inbox = OperatorInboxService()
 
     async def _run() -> dict[str, Any]:
+        draft_sender = None
+        if email is not None:
+            from brain_os.interfaces.email_processor import GmailDraftSender
+
+            draft_sender = GmailDraftSender(email_processor=email)
         return await inbox.decide(
             item_id=item_id,
             decision=dec,  # type: ignore[arg-type]
@@ -143,15 +201,19 @@ def operator_decide_cmd(
             to_address=to_address,
             outbound_approvals=outbound,
             email_processor=email,
+            draft_sender=draft_sender,
             tinder_service=tinder,
             quotes=quotes,
+            sqlite_first=True,
         )
 
     result = asyncio.run(_run())
     if json_output:
         print(json.dumps(result, ensure_ascii=False), flush=True)
     elif result.get("ok"):
-        console.print(f"[green]OK[/green] {result.get('action')} — {item_id}")
+        lat = (result.get("telemetry") or {}).get("latency_from_created")
+        lat_s = f" · latency={lat:.0f}s" if isinstance(lat, (int, float)) else ""
+        console.print(f"[green]OK[/green] {result.get('action')} — {item_id}{lat_s}")
     else:
         err_console.print(f"[red]{result.get('error')}[/red]")
         raise typer.Exit(1)

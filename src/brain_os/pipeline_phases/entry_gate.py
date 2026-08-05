@@ -71,14 +71,242 @@ async def run_entry_pre_perceive_gate(
 ) -> tuple[str, list[str], str] | None:
     """Entry graph: probe dedup, decide transition, run matching short-circuit."""
     dedup_hit = await probe_dedup_hit(pipeline=pipeline, state=state)
+    pending = state.pending
+    socratic_match: dict[str, Any] | None = None
+
+    # Clarification resume guard: TTL for all pending; full match for Socratic.
+    # Unrelated next messages abandon the gate (do NOT record as answers).
+    if pending is not None:
+        from brain_os.services.socratic_gate import (
+            classify_socratic_resume,
+            log_socratic_gate_event,
+            pending_is_expired,
+        )
+
+        if pending.get("socratic"):
+            llm = None
+            try:
+                sphinx = pipeline._pantheon.get_agent("sphinx")
+                if sphinx is not None:
+                    await sphinx._ensure_llm()
+                    llm = getattr(sphinx, "_llm", None)
+            except Exception:
+                llm = None
+            session_id = str(
+                meta.get("session_id") or meta.get("conversation_id") or sender_id or ""
+            )
+            conversation_id = str(meta.get("conversation_id") or meta.get("session_id") or "")
+            match = await classify_socratic_resume(
+                raw_input,
+                pending,
+                llm_client=llm,
+                session_id=session_id,
+                conversation_id=conversation_id,
+            )
+            socratic_match = {
+                "disposition": match.disposition,
+                "reason": match.reason,
+                "is_answer": match.is_answer,
+                "mapped_answers": dict(match.mapped_answers),
+                "partial_proceed": bool(match.partial_proceed),
+                "open_slots": [s.context_key for s in match.slots if s.status == "open"],
+                "filled_slots": [s.context_key for s in match.slots if s.status == "filled"],
+            }
+            trace["socratic_resume_match"] = socratic_match
+            if match.disposition == "reask":
+                # Partial fill — keep same gate_id, re-ask only open slots.
+                from brain_os.schemas.llm_outputs import ClarificationPayload
+                from brain_os.services.socratic_gate import (
+                    format_slot_progress,
+                    open_slots,
+                    questions_from_slots,
+                    slots_to_dicts,
+                )
+
+                still = open_slots(match.slots)
+                gid = str(pending.get("gate_id") or "").strip().lower()
+                reask_text = match.reask_rendered or format_slot_progress(match.slots, gate_id=gid)
+                open_qs = questions_from_slots(still)
+                open_defaults = {
+                    q.context_key: q.proposed_default
+                    for q in open_qs
+                    if q.context_key and q.proposed_default
+                }
+                payload = ClarificationPayload(
+                    needs_clarification=True,
+                    questions=reask_text.splitlines()
+                    if reask_text
+                    else [
+                        "IRA NEEDS INPUT (0 questions)",
+                        "",
+                        "Reply 'go' to proceed with all defaults.",
+                    ],
+                    reason=f"Socratic reask ({match.reason})",
+                    missing_slots=[s.kind or s.context_key for s in still],
+                    can_answer_partially=True,
+                )
+                # Preserve original query + created_at; refresh slots/questions.
+                extra = {
+                    "socratic": True,
+                    "gate_id": gid,
+                    "socratic_defaults": {
+                        **dict(pending.get("socratic_defaults") or {}),
+                        **dict(match.mapped_answers),
+                        **open_defaults,
+                    },
+                    "socratic_questions": [q.model_dump(mode="json") for q in open_qs],
+                    "socratic_slots": slots_to_dicts(match.slots),
+                    "socratic_score": pending.get("socratic_score") or {},
+                    "session_id": pending.get("session_id") or "",
+                    "conversation_id": pending.get("conversation_id") or "",
+                    "channel": channel,
+                    "sender_id": sender_id,
+                    "created_at": pending.get("created_at"),
+                    "status": "pending",
+                }
+                # Record answers received so far (filled only).
+                try:
+                    from brain_os.services.socratic_gate import record_socratic_resume_answers
+
+                    record_socratic_resume_answers(
+                        pending=pending,
+                        answer=raw_input,
+                        source="pipeline_reask",
+                        mapped_answers=dict(match.mapped_answers),
+                    )
+                except Exception:
+                    logger.debug("socratic reask answer record failed", exc_info=True)
+
+                clarification_q = await pipeline._store_clarification(
+                    sender_id=sender_id,
+                    agent_name="sphinx",
+                    original_query=str(pending.get("original_query") or raw_input),
+                    payload=payload,
+                    extra=extra,
+                )
+                log_socratic_gate_event(
+                    {
+                        "status": "reask",
+                        "reason": match.reason,
+                        "sender_id": sender_id,
+                        "channel": channel,
+                        "gate_id": gid,
+                        "filled_slots": socratic_match["filled_slots"],
+                        "open_slots": socratic_match["open_slots"],
+                    }
+                )
+                shaped = clarification_q or reask_text
+                trace["early_exit"] = "sphinx_socratic_reask"
+                trace["agents"] = ["sphinx"]
+                trace["socratic_needs_input"] = True
+                if gid:
+                    trace["gate_id"] = gid
+                    meta["gate_id"] = gid
+                return shaped, ["sphinx"], run_id
+            if match.disposition == "insufficient":
+                shaped = str(pending.get("clarification_question") or "").strip()
+                if not shaped:
+                    from brain_os.services.socratic_gate import format_slot_progress, slots_from_pending
+
+                    shaped = format_slot_progress(
+                        slots_from_pending(pending),
+                        gate_id=str(pending.get("gate_id") or ""),
+                    )
+                from brain_os.schemas.llm_outputs import ClarificationPayload
+
+                await pipeline._store_clarification(
+                    sender_id=sender_id,
+                    agent_name=str(pending.get("agent_name") or "sphinx"),
+                    original_query=str(pending.get("original_query") or raw_input),
+                    payload=ClarificationPayload(
+                        needs_clarification=True,
+                        questions=shaped.splitlines(),
+                        reason="Socratic insufficient answer",
+                        missing_slots=list(pending.get("missing_slots") or []),
+                        can_answer_partially=True,
+                    ),
+                    extra={
+                        k: pending[k]
+                        for k in (
+                            "socratic",
+                            "gate_id",
+                            "socratic_defaults",
+                            "socratic_questions",
+                            "socratic_slots",
+                            "socratic_score",
+                            "session_id",
+                            "conversation_id",
+                            "channel",
+                            "sender_id",
+                            "created_at",
+                            "status",
+                        )
+                        if k in pending
+                    },
+                )
+                log_socratic_gate_event(
+                    {
+                        "status": "insufficient",
+                        "reason": match.reason,
+                        "sender_id": sender_id,
+                        "channel": channel,
+                        "gate_id": pending.get("gate_id"),
+                    }
+                )
+                trace["early_exit"] = "sphinx_socratic_insufficient"
+                trace["agents"] = ["sphinx"]
+                trace["socratic_needs_input"] = True
+                return shaped, ["sphinx"], run_id
+            if match.disposition in ("abandoned", "expired"):
+                log_socratic_gate_event(
+                    {
+                        "status": match.disposition,
+                        "reason": match.reason,
+                        "sender_id": sender_id,
+                        "channel": channel,
+                        "gate_id": pending.get("gate_id"),
+                        "original_query": pending.get("original_query"),
+                        "inbound": (raw_input or "")[:500],
+                        "pending_created_at": pending.get("created_at"),
+                    }
+                )
+                logger.info(
+                    "SOCRATIC %s | reason=%s — continuing with new request (no answer recorded)",
+                    match.disposition.upper(),
+                    match.reason,
+                )
+                pending = None
+            elif match.disposition == "answer":
+                meta["_socratic_mapped_answers"] = dict(match.mapped_answers)
+                if match.slots:
+                    meta["_socratic_slots"] = [s.to_dict() for s in match.slots]
+                if match.partial_proceed:
+                    meta["_socratic_partial_proceed"] = True
+                    trace["socratic_partial_proceed"] = True
+        elif pending_is_expired(pending):
+            log_socratic_gate_event(
+                {
+                    "status": "expired",
+                    "reason": "ttl_exceeded",
+                    "sender_id": sender_id,
+                    "channel": channel,
+                    "original_query": pending.get("original_query"),
+                    "inbound": (raw_input or "")[:500],
+                    "pending_created_at": pending.get("created_at"),
+                    "socratic": False,
+                }
+            )
+            logger.info("CLARIFY EXPIRED | continuing with new request")
+            pending = None
+
     decision = decide_entry_pre_perceive_from_turn(
         bypass_cheap_exits=state.bypass_cheap_exits,
-        pending_clarification=state.pending,
+        pending_clarification=pending,
         dedup_hit=dedup_hit,
         raw_input=raw_input,
         clarification_resume_agent_available=_clarification_resume_agent_available(
             pipeline,
-            state.pending,
+            pending,
         ),
     )
     attach_transition_to_trace(trace, decision, phase="entry")
@@ -111,7 +339,7 @@ async def run_entry_pre_perceive_gate(
     ):
         out = await maybe_resume_pending_clarification_with_checkpoint(
             pipeline=pipeline,
-            pending=state.pending,
+            pending=pending,
             raw_input=raw_input,
             sender_id=sender_id,
             channel=channel,
@@ -255,6 +483,25 @@ async def maybe_resume_pending_clarification_with_checkpoint(
             response_text=shaped,
         )
         return shaped, [agent_name], run_id
+
+    if pending.get("socratic"):
+        try:
+            from brain_os.services.socratic_gate import record_socratic_resume_answers
+
+            procedural = getattr(pipeline, "_procedural", None)
+            mapped = meta.get("_socratic_mapped_answers")
+            mapped_dict = mapped if isinstance(mapped, dict) else None
+            promos = record_socratic_resume_answers(
+                pending=pending,
+                answer=answer,
+                source="pipeline",
+                procedural_memory=procedural,
+                mapped_answers=mapped_dict,
+            )
+            if promos:
+                trace["socratic_promotions"] = promos
+        except Exception:
+            logger.debug("Socratic answer logging failed", exc_info=True)
 
     if checkpoint_supports_pipeline_resume(checkpoint):
         stage_clarification_pipeline_resume(

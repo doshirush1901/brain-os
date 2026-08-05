@@ -7,8 +7,11 @@ between agent execution and final answer shaping.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -18,6 +21,48 @@ from brain_os.prompt_loader import load_prompt
 from brain_os.service_keys import ServiceKey as SK
 
 logger = logging.getLogger(__name__)
+
+_PEER_DLP_POLICY_PATH = (
+    Path(os.environ.get("BRAIN_DATA_DIR", "data")) / "knowledge" / "peer_dlp_policy.json"
+)
+
+
+def _load_peer_dlp_policy() -> dict[str, Any]:
+    """Load peer-system DLP policy; fail closed on any error."""
+    try:
+        raw = _PEER_DLP_POLICY_PATH.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except (OSError, json.JSONDecodeError, TypeError) as exc:
+        raise RuntimeError(f"peer DLP policy load failed: {exc}") from exc
+    if not isinstance(data, dict):
+        raise RuntimeError("peer DLP policy must be a JSON object")
+    return data
+
+
+def _compile_peer_block_patterns(policy: dict[str, Any]) -> list[tuple[str, re.Pattern[str]]]:
+    patterns = policy.get("block_patterns") or {}
+    if not isinstance(patterns, dict):
+        raise RuntimeError("peer DLP block_patterns must be an object")
+    compiled: list[tuple[str, re.Pattern[str]]] = []
+    for name, expr in patterns.items():
+        if not isinstance(expr, str):
+            continue
+        try:
+            compiled.append((str(name), re.compile(expr, re.IGNORECASE)))
+        except re.error as exc:
+            raise RuntimeError(f"invalid block_pattern {name!r}: {exc}") from exc
+    return compiled
+
+
+try:
+    _PEER_DLP_POLICY: dict[str, Any] = _load_peer_dlp_policy()
+    _PEER_BLOCK_PATTERNS = _compile_peer_block_patterns(_PEER_DLP_POLICY)
+except RuntimeError:
+    logger.exception(
+        "Failed to load peer DLP policy at import — peer_system_dlp_check will fail closed"
+    )
+    _PEER_DLP_POLICY = {}
+    _PEER_BLOCK_PATTERNS = []
 
 _DLP_SERVICE_ERRORS = (
     httpx.HTTPError,
@@ -48,6 +93,59 @@ class Aegis(BaseAgent):
     description = "Scans outbound content for PII, confidential terms, and data leakage risks"
     knowledge_categories = ["company_internal", "contracts_and_legal"]
     timeout = 30
+
+    @staticmethod
+    async def peer_system_dlp_check(
+        question: str, category: str = "agent_architecture"
+    ) -> dict[str, Any]:
+        """Pre-flight DLP gate for outbound calls to peer agent systems (Lettie -> Letta)."""
+        if not _PEER_DLP_POLICY:
+            return {"blocked": True, "reason": "peer DLP policy unavailable"}
+
+        allowed = _PEER_DLP_POLICY.get("allowed_categories") or []
+        if category not in allowed:
+            return {
+                "blocked": True,
+                "reason": f"category {category!r} not in allowlist",
+            }
+
+        text = (question or "").strip()
+        if not text:
+            return {"blocked": True, "reason": "empty question"}
+
+        size_limits = _PEER_DLP_POLICY.get("size_limits") or {}
+        max_chars = int(size_limits.get("max_question_chars") or 0)
+        if max_chars > 0 and len(text) > max_chars:
+            return {
+                "blocked": True,
+                "reason": f"question exceeds {max_chars} characters",
+            }
+
+        for pattern_name, pattern in _PEER_BLOCK_PATTERNS:
+            if pattern.search(text):
+                return {
+                    "blocked": True,
+                    "reason": f"matched block pattern: {pattern_name}",
+                }
+
+        keywords = _PEER_DLP_POLICY.get("block_keywords") or []
+        lower = text.lower()
+        for kw in keywords:
+            if isinstance(kw, str) and kw.lower() in lower:
+                return {
+                    "blocked": True,
+                    "reason": f"matched block keyword: {kw}",
+                }
+
+        neo_cfg = _PEER_DLP_POLICY.get("neo4j_entity_blocklist") or {}
+        if isinstance(neo_cfg, dict) and neo_cfg.get("enabled"):
+            logger.warning("peer DLP neo4j_entity_blocklist enabled but not implemented — blocking")
+            return {
+                "blocked": True,
+                "reason": "neo4j entity blocklist not yet implemented",
+            }
+
+        return {"blocked": False, "question": text}
 
     def _register_default_tools(self) -> None:
         super()._register_default_tools()

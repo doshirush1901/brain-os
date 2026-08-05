@@ -123,7 +123,7 @@ async def search_cursor_sessions(
                 """,
                 (mq, max(1, min(limit, 100))),
             )
-        except Exception as exc:
+        except Exception:
             logger.exception("cursor_session_fts search failed for MATCH %r", mq)
             raise
         rows = await cur.fetchall()

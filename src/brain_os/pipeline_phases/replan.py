@@ -154,10 +154,20 @@ def build_assertion_escalation_clarification_question(
     )
 
 
-def format_completed_phases_summary(completed_snippets: list[tuple[int, str, str]]) -> str:
-    """One line per completed phase for Athena replan prompts."""
+def format_completed_phases_summary(
+    completed_snippets: list[tuple[int, str, str]],
+    *,
+    max_snippet_chars: int = 300,
+) -> str:
+    """One line per completed phase for Athena replan prompts.
+
+    ``max_snippet_chars`` defaults to 300 (terse, replan-sized). Callers that
+    need the verifier/judge to see full evidence (citations, URLs, dates)
+    should pass a larger cap — at 300 the StandingGoalJudge never sees the
+    source lines and returns ``continue`` forever.
+    """
     return "\n".join(
-        f"Phase {phase_id} ({title}): {snippet[:300]}"
+        f"Phase {phase_id} ({title}): {snippet[:max_snippet_chars]}"
         for phase_id, title, snippet in completed_snippets
     )
 
@@ -237,8 +247,186 @@ async def maybe_run_sphinx_gate(
     logger: Any,
     sphinx_timeout_s: int = 15,
     clarification_checkpoint: dict[str, Any] | None = None,
+    pantheon: Any | None = None,
+    crm: Any | None = None,
+    email_processor: Any | None = None,
+    knowledge_graph: Any | None = None,
 ) -> tuple[str, list[str], str] | None:
-    """Run Sphinx clarity gate and return an early clarification response when needed."""
+    """Run Sphinx clarity gate and return an early clarification response when needed.
+
+    Sphinx v2: stakes × ambiguity Socratic gate runs first (fast, no agent
+    execution when gated). Legacy ``[CLEAR]/[CLARIFY]`` Sphinx ReAct remains
+    as a fallback when the Socratic gate is disabled or pass-through fails open.
+    """
+    try:
+        from brain_os.config import get_settings
+        from brain_os.services.socratic_gate import (
+            evaluate_socratic_gate,
+            gate_score_as_dict,
+            gather_live_gap_context,
+            query_looks_outboundish,
+            socratic_extra_state,
+        )
+
+        # Organism golden / replay grade answers, not clarification theater.
+        if str(meta.get("eval_channel") or "") in {"organism_golden", "replay"}:
+            return None
+
+        app = get_settings().app
+        ask_first = bool(meta.get("ask_first") or meta.get("socratic_ask_first"))
+        if app.socratic_gate_enabled or ask_first:
+            if on_progress:
+                await on_progress({"type": "sphinx_checking"})
+            llm = None
+            if sphinx_agent is not None:
+                try:
+                    await sphinx_agent._ensure_llm()
+                    llm = getattr(sphinx_agent, "_llm", None)
+                except Exception:
+                    llm = None
+
+            gap_kwargs: dict[str, Any] = {}
+            # Meta overrides win (tests / operator-forced legs).
+            for key in (
+                "has_open_quote",
+                "mail_touch_count",
+                "kb_quote_hits",
+                "crm_stage",
+                "entity_candidates",
+            ):
+                if key in meta and meta[key] is not None:
+                    gap_kwargs[key] = meta[key]
+
+            if query_looks_outboundish(resolved_input) or ask_first:
+                live = await gather_live_gap_context(
+                    resolved_input,
+                    crm=crm,
+                    email_processor=email_processor,
+                    knowledge_graph=knowledge_graph,
+                    timeout_s=min(2.5, max(0.8, float(sphinx_timeout_s) * 0.2)),
+                    entity_candidates=gap_kwargs.get("entity_candidates"),
+                )
+                for k, v in live.as_eval_kwargs().items():
+                    gap_kwargs.setdefault(k, v)
+                if live.sources:
+                    trace["socratic_gap_sources"] = list(live.sources)
+                    meta["socratic_gap_sources"] = list(live.sources)
+
+            async def _eval(llm_client: Any | None) -> Any:
+                return await evaluate_socratic_gate(
+                    resolved_input,
+                    llm_client=llm_client,
+                    ask_first=ask_first,
+                    channel=channel,
+                    enabled=True if ask_first else None,
+                    **gap_kwargs,
+                )
+
+            try:
+                socratic = await asyncio.wait_for(_eval(llm), timeout=sphinx_timeout_s)
+            except TimeoutError:
+                logger.warning(
+                    "Sphinx Socratic LLM path timed out after %ds — deterministic fallback",
+                    sphinx_timeout_s,
+                )
+                socratic = await evaluate_socratic_gate(
+                    resolved_input,
+                    llm_client=None,
+                    ask_first=ask_first,
+                    channel=channel,
+                    enabled=True if ask_first else None,
+                    **gap_kwargs,
+                )
+            trace["socratic_gate"] = gate_score_as_dict(socratic.score)
+            if gap_kwargs:
+                trace["socratic_gap_kwargs"] = {
+                    k: (list(v) if isinstance(v, list) else v) for k, v in gap_kwargs.items()
+                }
+            if socratic.gated and socratic.clarification is not None:
+                session_id = str(
+                    meta.get("session_id") or meta.get("conversation_id") or sender_id or ""
+                )
+                conversation_id = str(meta.get("conversation_id") or meta.get("session_id") or "")
+                clarification_q = await store_clarification_fn(
+                    sender_id=sender_id,
+                    agent_name="sphinx",
+                    original_query=resolved_input,
+                    payload=socratic.clarification,
+                    checkpoint=clarification_checkpoint,
+                    extra=socratic_extra_state(
+                        socratic,
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                        channel=channel,
+                        sender_id=sender_id,
+                    ),
+                )
+                if on_progress:
+                    await on_progress(
+                        {
+                            "type": "sphinx_clarifying",
+                            "questions": clarification_q[:300],
+                            "socratic": True,
+                        }
+                    )
+                logger.info(
+                    "SPHINX SOCRATIC | stakes=%.2f amb=%.2f gate=%.2f for %s",
+                    socratic.score.stakes,
+                    socratic.score.ambiguity,
+                    socratic.score.gate_score,
+                    contact_email,
+                )
+                # Pass through verbatim — voice reshape must not bury the gate.
+                shaped = clarification_q
+                record_route_stage_fn()
+                push_timings_fn()
+                trace["uncertainty_contract"] = "clarify"
+                trace["early_exit"] = "sphinx_socratic"
+                trace["agents"] = ["sphinx"]
+                trace["socratic_needs_input"] = True
+                if socratic.gate_id:
+                    trace["gate_id"] = socratic.gate_id
+                    meta["gate_id"] = socratic.gate_id
+                from brain_os.pipeline_phases.compile import schedule_exit_run_record
+
+                schedule_exit_run_record(
+                    meta=meta,
+                    run_id=run_id,
+                    channel=channel,
+                    sender_id=sender_id,
+                    ts_start=ts_start,
+                    trace=trace,
+                    agents_used=["sphinx"],
+                    raw_input=resolved_input,
+                    response_text=shaped,
+                )
+                from brain_os.brain.graphe_instrumentation import log_graphe_pipeline_turn
+
+                await log_graphe_pipeline_turn(
+                    pantheon,
+                    query=resolved_input,
+                    agents_used=["sphinx"],
+                    raw_response=clarification_q,
+                    run_id=run_id,
+                    channel=channel,
+                    route_method="sphinx_socratic",
+                    contact_email=contact_email,
+                    early_exit="sphinx_socratic",
+                )
+                return shaped, ["sphinx"], run_id
+            logger.info(
+                "SPHINX SOCRATIC PASS | stakes=%.2f amb=%.2f gate=%.2f",
+                socratic.score.stakes,
+                socratic.score.ambiguity,
+                socratic.score.gate_score,
+            )
+            if app.socratic_gate_enabled:
+                return None
+    except TimeoutError:
+        logger.warning("Sphinx Socratic gate timed out after %ds — proceeding", sphinx_timeout_s)
+    except Exception:
+        logger.debug("Sphinx Socratic gate failed (non-critical)", exc_info=True)
+
     try:
         if sphinx_agent is not None:
             if on_progress:
@@ -279,6 +467,19 @@ async def maybe_run_sphinx_gate(
                     agents_used=["sphinx"],
                     raw_input=resolved_input,
                     response_text=shaped,
+                )
+                from brain_os.brain.graphe_instrumentation import log_graphe_pipeline_turn
+
+                await log_graphe_pipeline_turn(
+                    pantheon,
+                    query=resolved_input,
+                    agents_used=["sphinx"],
+                    raw_response=clarification_q,
+                    run_id=run_id,
+                    channel=channel,
+                    route_method="sphinx_clarify",
+                    contact_email=contact_email,
+                    early_exit="sphinx_clarify",
                 )
                 return shaped, ["sphinx"], run_id
             if str(sphinx_verdict).upper().strip().startswith("[CLEAR]"):

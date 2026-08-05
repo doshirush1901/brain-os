@@ -43,6 +43,7 @@ from brain_os.brain.document_ingestor import (
 from brain_os.brain.imports_intents import normalize_intent_tags
 from brain_os.brain.imports_metadata_index import (
     _MACHINE_MODEL_RE,
+    IMPORTS_DIR,
     load_index,
     search_index,
 )
@@ -388,32 +389,86 @@ async def extract_file_text(filepath: str | Path, max_chars: int = _MAX_EXTRACT_
 # ── deferred ingestion queue ─────────────────────────────────────────────
 
 
+def normalize_deferred_filepath(filepath: str | Path) -> Path:
+    """Resolve *filepath*; prefer canonical path under the live imports root."""
+    raw = Path(str(filepath)).expanduser()
+    try:
+        resolved = raw.resolve()
+    except (OSError, RuntimeError):
+        resolved = raw
+
+    try:
+        imports_root = IMPORTS_DIR.resolve()
+    except (OSError, RuntimeError):
+        imports_root = IMPORTS_DIR
+
+    try:
+        rel = resolved.relative_to(imports_root)
+        return (imports_root / rel).resolve()
+    except ValueError:
+        pass
+
+    # Unresolved symlink form: examples/acme/docs/... relative to project root
+    try:
+        if "data/imports" in str(resolved).replace("\\", "/"):
+            parts = str(resolved).replace("\\", "/").split("examples/acme/docs/", 1)
+            if len(parts) == 2 and parts[1]:
+                candidate = (imports_root / parts[1]).resolve()
+                if candidate.exists() or not resolved.exists():
+                    return candidate
+    except (OSError, RuntimeError, ValueError):
+        pass
+
+    return resolved
+
+
+def imports_rel_path(filepath: str | Path) -> str | None:
+    """Return path relative to ``data/imports`` if *filepath* is under it."""
+    path = normalize_deferred_filepath(filepath)
+    try:
+        imports_root = IMPORTS_DIR.resolve()
+    except (OSError, RuntimeError):
+        imports_root = IMPORTS_DIR
+    try:
+        return str(path.relative_to(imports_root))
+    except ValueError:
+        return None
+
+
+def _pending_filepaths_from_raw(raw: str) -> set[str]:
+    pending: set[str] = set()
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if entry.get("status") == "pending" and entry.get("filepath"):
+            pending.add(str(normalize_deferred_filepath(entry["filepath"])))
+    return pending
+
+
 async def queue_for_deferred_ingestion(
     filepath: str,
     filename: str,
     query: str,
     doc_type: str,
-) -> None:
+) -> bool:
     """Queue a file for proper ingestion during the next sleep cycle.
 
+    Dedupes by normalized filepath while status is ``pending``.
     Uses atomic write (temp file + rename) to prevent corruption.
+    Returns True when a new pending entry was appended.
     """
 
-    def _write() -> None:
+    normalized = str(normalize_deferred_filepath(filepath))
+    name = filename or Path(normalized).name
+
+    def _write() -> bool:
         import fcntl
 
         DEFERRED_QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        entry = json.dumps(
-            {
-                "filepath": filepath,
-                "filename": filename,
-                "query_that_triggered": query,
-                "doc_type": doc_type,
-                "queued_at": datetime.now(UTC).isoformat(),
-                "status": "pending",
-            }
-        )
-
         lock_path = DEFERRED_QUEUE_PATH.with_suffix(".lock")
         with open(lock_path, "w") as lock_f:
             fcntl.flock(lock_f, fcntl.LOCK_EX)
@@ -421,6 +476,19 @@ async def queue_for_deferred_ingestion(
                 existing = ""
                 if DEFERRED_QUEUE_PATH.exists():
                     existing = DEFERRED_QUEUE_PATH.read_text()
+                if normalized in _pending_filepaths_from_raw(existing):
+                    return False
+
+                entry = json.dumps(
+                    {
+                        "filepath": normalized,
+                        "filename": name,
+                        "query_that_triggered": query,
+                        "doc_type": doc_type,
+                        "queued_at": datetime.now(UTC).isoformat(),
+                        "status": "pending",
+                    }
+                )
 
                 fd, tmp_path = tempfile.mkstemp(
                     dir=str(DEFERRED_QUEUE_PATH.parent),
@@ -437,14 +505,20 @@ async def queue_for_deferred_ingestion(
                 except (BrainOSError, OSError, ValueError, TypeError, AttributeError):
                     os.unlink(tmp_path)
                     raise
+                return True
             finally:
                 fcntl.flock(lock_f, fcntl.LOCK_UN)
 
     try:
-        await asyncio.to_thread(_write)
-        logger.info("Queued %s for deferred ingestion", filename)
+        added = await asyncio.to_thread(_write)
+        if added:
+            logger.info("Queued %s for deferred ingestion", name)
+        else:
+            logger.debug("Deferred queue already pending for %s", name)
+        return added
     except (IngestionError, OSError, ValueError, TypeError, AttributeError, BrainOSError) as exc:
-        logger.warning("Failed to queue %s: %s", filename, exc)
+        logger.warning("Failed to queue %s: %s", name, exc)
+        return False
 
 
 async def load_deferred_queue() -> list[dict[str, Any]]:
@@ -459,49 +533,101 @@ async def load_deferred_queue() -> list[dict[str, Any]]:
         try:
             entry = json.loads(line)
             if entry.get("status") == "pending":
+                if entry.get("filepath"):
+                    entry["filepath"] = str(normalize_deferred_filepath(entry["filepath"]))
                 entries.append(entry)
         except json.JSONDecodeError:
             continue
     return entries
 
 
-async def mark_deferred_ingested(filepath: str) -> None:
-    """Mark a deferred queue entry as ingested (atomic rewrite)."""
+def _rewrite_deferred_statuses(
+    match_filepaths: set[str],
+    *,
+    status: str,
+    detail: str = "",
+) -> None:
+    if not DEFERRED_QUEUE_PATH.exists():
+        return
+    lines = DEFERRED_QUEUE_PATH.read_text().splitlines()
+    updated: list[str] = []
+    now = datetime.now(UTC).isoformat()
+    matched = {str(normalize_deferred_filepath(p)) for p in match_filepaths}
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+            fp = entry.get("filepath", "")
+            if (
+                entry.get("status") == "pending"
+                and fp
+                and str(normalize_deferred_filepath(fp)) in matched
+            ):
+                entry["status"] = status
+                entry["resolved_at"] = now
+                if detail:
+                    entry["detail"] = detail
+                if status == "ingested":
+                    entry["ingested_at"] = now
+            updated.append(json.dumps(entry))
+        except json.JSONDecodeError:
+            updated.append(line)
+
+    content = "\n".join(updated) + "\n"
+    fd, tmp_path = tempfile.mkstemp(
+        dir=str(DEFERRED_QUEUE_PATH.parent),
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+        os.replace(tmp_path, str(DEFERRED_QUEUE_PATH))
+    except (BrainOSError, OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+async def mark_deferred_status(
+    filepath: str,
+    status: str,
+    *,
+    detail: str = "",
+) -> None:
+    """Mark pending deferred queue entries for *filepath* with *status*."""
 
     def _rewrite() -> None:
-        if not DEFERRED_QUEUE_PATH.exists():
-            return
-        lines = DEFERRED_QUEUE_PATH.read_text().splitlines()
-        updated: list[str] = []
-        for line in lines:
-            if not line.strip():
-                continue
-            try:
-                entry = json.loads(line)
-                if entry.get("filepath") == filepath and entry.get("status") == "pending":
-                    entry["status"] = "ingested"
-                    entry["ingested_at"] = datetime.now(UTC).isoformat()
-                updated.append(json.dumps(entry))
-            except json.JSONDecodeError:
-                updated.append(line)
-
-        content = "\n".join(updated) + "\n"
-        fd, tmp_path = tempfile.mkstemp(
-            dir=str(DEFERRED_QUEUE_PATH.parent),
-            suffix=".tmp",
-        )
-        try:
-            with os.fdopen(fd, "w") as f:
-                f.write(content)
-            os.replace(tmp_path, str(DEFERRED_QUEUE_PATH))
-        except (BrainOSError, OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
+        _rewrite_deferred_statuses({filepath}, status=status, detail=detail)
 
     await asyncio.to_thread(_rewrite)
+
+
+async def mark_deferred_ingested(filepath: str) -> None:
+    """Mark a deferred queue entry as ingested (atomic rewrite)."""
+    await mark_deferred_status(filepath, "ingested")
+
+
+async def hygiene_missing_deferred_paths() -> int:
+    """Mark pending entries whose files no longer exist as ``missing``.
+
+    Returns the number of entries marked missing.
+    """
+    pending = await load_deferred_queue()
+    missing = [
+        e["filepath"] for e in pending if e.get("filepath") and not Path(e["filepath"]).exists()
+    ]
+    if not missing:
+        return 0
+
+    def _rewrite() -> None:
+        _rewrite_deferred_statuses(set(missing), status="missing", detail="path_not_found")
+
+    await asyncio.to_thread(_rewrite)
+    logger.info("Deferred queue hygiene: marked %d missing paths", len(missing))
+    return len(missing)
 
 
 # ── main entry point ─────────────────────────────────────────────────────

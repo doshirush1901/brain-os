@@ -25,6 +25,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from neo4j.exceptions import Neo4jError
+
 from brain_os.brain.imports_metadata_index import load_index
 from brain_os.brain.ingestion_log import (
     CURRENT_PIPELINE,
@@ -37,7 +39,7 @@ from brain_os.brain.ingestion_log import (
 )
 from brain_os.brain.source_identity import make_source_id
 from brain_os.contracts.memory_protocols import LongTermMemoryStoreProtocol
-from brain_os.exceptions import IngestionError, BrainOSError
+from brain_os.exceptions import DatabaseError, IngestionError, BrainOSError
 from brain_os.knowledge.teacher_provenance import (
     SOURCE_CATEGORY_TEACHER_CANON,
     teacher_metadata_for_corpus,
@@ -209,7 +211,7 @@ async def run_ingestion_cycle(
     *progress_callback(done, total, filename, file_result)* is called
     after each file finishes so the CLI can update a progress bar.
     """
-    from brain_os.brain.document_ingestor import DocumentIngestor, _get_reader
+    from brain_os.brain.document_ingestor import DocumentIngestor, _get_reader, _normalize_reader_output
     from brain_os.brain.embeddings import EmbeddingService
     from brain_os.brain.knowledge_graph import KnowledgeGraph
     from brain_os.brain.qdrant_manager import QdrantManager
@@ -292,7 +294,24 @@ async def run_ingestion_cycle(
             "doc_type": file_info.get("doc_type", "other"),
             "chunk_count": chunks,
             "entities": entities,
+            "memory_category": "ingest_log",
         }
+        # Category gate blocks ingest_log from Mem0 (stomach ledger already records).
+        if hasattr(long_term_memory, "store_gated"):
+            gated = await long_term_memory.store_gated(
+                content,
+                user_id="global",
+                metadata=metadata,
+                source="ingest:source_log",
+                category="ingest_log",
+            )
+            stored = not gated.get("skipped")
+            count = len(gated.get("entries") or []) if stored else 0
+            return {
+                "attempted": True,
+                "status": "stored" if stored else f"blocked:{gated.get('reason', 'policy')}",
+                "count": count,
+            }
         memories = await long_term_memory.store(content, user_id="global", metadata=metadata)
         return {
             "attempted": True,
@@ -335,7 +354,9 @@ async def run_ingestion_cycle(
                         progress_callback(done_count, batch_total, file_info["name"], {})
                 return
 
-            text = reader(filepath)
+            raw = reader(filepath)
+            parse = _normalize_reader_output(raw)
+            text = parse.text
             if not text or not text.strip():
                 async with lock:
                     record_ingestion_attempt(
@@ -386,7 +407,7 @@ async def run_ingestion_cycle(
                             source_id=source_id,
                             result=result,
                         )
-                    except BrainOSError as exc:
+                    except BrainOSError:
                         logger.warning("Memory write failed for %s", rel_path, exc_info=True)
                         memory_result = {
                             "attempted": True,
@@ -424,7 +445,15 @@ async def run_ingestion_cycle(
                 if progress_callback is not None:
                     progress_callback(done_count, batch_total, file_info["name"], result)
 
-        except (IngestionError, OSError, ValueError, TypeError) as exc:
+        except (
+            IngestionError,
+            DatabaseError,
+            Neo4jError,
+            OSError,
+            RuntimeError,
+            ValueError,
+            TypeError,
+        ) as exc:
             logger.exception("Gatekeeper: failed to ingest %s", rel_path)
             async with lock:
                 errors.append(f"{rel_path}: {exc}")
@@ -494,3 +523,225 @@ async def run_ingestion_cycle(
         logger.debug("Could not write ingestion metrics: %s", e)
 
     return summary
+
+
+async def ingest_single_path(
+    filepath: str | Path,
+    *,
+    force: bool = False,
+    source_category: str | None = None,
+    doc_type: str = "other",
+    long_term_memory: LongTermMemoryStoreProtocol | None = None,
+) -> dict[str, Any]:
+    """Digest one file through DigestiveSystem and update ``ingestion_log``.
+
+    Prefer this over raw ``DocumentIngestor`` for operator / MCP / Dream Stage 0
+    so Qdrant, Neo4j, and the gatekeeper log stay consistent.
+    """
+    from brain_os.brain.document_ingestor import DocumentIngestor, _get_reader, _normalize_reader_output
+    from brain_os.brain.embeddings import EmbeddingService
+    from brain_os.brain.imports_fallback_retriever import imports_rel_path, normalize_deferred_filepath
+    from brain_os.brain.imports_metadata_index import build_index
+    from brain_os.brain.knowledge_graph import KnowledgeGraph
+    from brain_os.brain.qdrant_manager import QdrantManager
+    from brain_os.config import get_settings
+    from brain_os.systems.digestive import DigestiveSystem
+
+    path = normalize_deferred_filepath(filepath)
+    if not path.is_file():
+        return {
+            "status": "missing",
+            "chunks_created": 0,
+            "entities_found": {},
+            "pipeline": CURRENT_PIPELINE,
+            "path": str(path),
+            "detail": "path_not_found",
+        }
+
+    rel = imports_rel_path(path)
+    under_imports = rel is not None
+    if under_imports and rel:
+        parent = str(Path(rel).parent).replace("\\", "/")
+        if parent and parent != ".":
+            include = (f"{parent}/",)
+            try:
+                await build_index(use_llm=False, force=False, include_prefixes=include)
+            except (IngestionError, OSError, RuntimeError, ValueError, TypeError):
+                logger.debug("ingest_single_path: build_index skipped for %s", path, exc_info=True)
+    if not rel:
+        try:
+            rel = str(path.relative_to(Path.cwd()))
+        except ValueError:
+            rel = path.name
+
+    file_hash = file_fingerprint(path)
+    log = await load_log()
+    if not force:
+        reason = needs_ingestion(log, rel, file_hash, force=False)
+        if not reason:
+            return {
+                "status": "up_to_date",
+                "chunks_created": int(log["files"].get(rel, {}).get("chunks_created", 0)),
+                "entities_found": log["files"].get(rel, {}).get("entities", {}),
+                "pipeline": CURRENT_PIPELINE,
+                "path": str(path),
+                "rel_path": rel,
+            }
+
+    category = source_category
+    if not category:
+        if under_imports:
+            index = await load_index()
+            meta = index.get("files", {}).get(rel, {})
+            category = _resolve_source_category(rel, meta)
+        else:
+            category = "mcp_upload"
+
+    ext = path.suffix.lower()
+    reader = _get_reader(ext)
+    settings = get_settings()
+    collection = settings.qdrant.collection
+    source_id = make_source_id(str(path), file_hash)
+
+    if reader is None:
+        record_ingestion_attempt(
+            log,
+            rel,
+            file_hash,
+            collection=collection,
+            source_id=source_id,
+            status="unsupported_extension",
+            detail=ext,
+        )
+        await save_log(log)
+        return {
+            "status": "unsupported_extension",
+            "chunks_created": 0,
+            "entities_found": {},
+            "pipeline": CURRENT_PIPELINE,
+            "path": str(path),
+            "rel_path": rel,
+            "detail": ext,
+        }
+
+    embedding = EmbeddingService()
+    qdrant = QdrantManager(embedding_service=embedding)
+    await qdrant.ensure_collection()
+    graph = KnowledgeGraph()
+    ingestor = DocumentIngestor(qdrant=qdrant, knowledge_graph=graph)
+    digestive = DigestiveSystem(
+        ingestor=ingestor,
+        knowledge_graph=graph,
+        embedding_service=embedding,
+        qdrant=qdrant,
+    )
+
+    try:
+        raw = await asyncio.to_thread(reader, path)
+        parse = _normalize_reader_output(raw)
+        text = parse.text
+        if not text or not text.strip():
+            record_ingestion_attempt(
+                log,
+                rel,
+                file_hash,
+                collection=collection,
+                source_id=source_id,
+                status="empty_content",
+            )
+            await save_log(log)
+            return {
+                "status": "empty",
+                "chunks_created": 0,
+                "entities_found": {},
+                "pipeline": CURRENT_PIPELINE,
+                "path": str(path),
+                "rel_path": rel,
+            }
+
+        result = await digestive.ingest(
+            raw_data=text,
+            source=str(path),
+            source_category=category,
+            source_id=source_id,
+            doc_type=doc_type or "other",
+        )
+        chunks = int(result.get("chunks_created", 0))
+        if chunks == 0 and len(text.strip()) >= _MIN_TEXT_FOR_DIRECT_INGEST:
+            file_info = {
+                "path": str(path),
+                "name": path.name,
+                "extension": ext,
+                "size": path.stat().st_size,
+                "category": category,
+                "doc_type": doc_type or "other",
+            }
+            direct_chunks = await ingestor.ingest_file(file_info, force=True)
+            if direct_chunks > 0:
+                chunks = direct_chunks
+                result = {
+                    "chunks_created": direct_chunks,
+                    "nutrients_extracted": {"protein": 0, "carbs": 0, "waste": 0},
+                    "entities_found": {},
+                    "ingest_status": "direct_chunk_fallback",
+                }
+
+        if chunks > 0:
+            if long_term_memory is not None:
+                try:
+                    ingest_body = (
+                        f"Ingested source {path.name} (category={category}) with {chunks} chunks."
+                    )
+                    ingest_meta = {
+                        "type": "ingested_source",
+                        "source_id": source_id,
+                        "source_path": str(path),
+                        "memory_category": "ingest_log",
+                    }
+                    if hasattr(long_term_memory, "store_gated"):
+                        await long_term_memory.store_gated(
+                            ingest_body,
+                            user_id="global",
+                            metadata=ingest_meta,
+                            source="ingest:source_log",
+                            category="ingest_log",
+                        )
+                    else:
+                        await long_term_memory.store(
+                            ingest_body, user_id="global", metadata=ingest_meta
+                        )
+                except BrainOSError:
+                    logger.debug("Memory write skipped for %s", path, exc_info=True)
+            record_ingestion(log, rel, file_hash, result, collection, source_id=source_id)
+            await save_log(log)
+            return {
+                "status": "ok",
+                "chunks_created": chunks,
+                "entities_found": result.get("entities_found", {}),
+                "pipeline": CURRENT_PIPELINE,
+                "path": str(path),
+                "rel_path": rel,
+                "source_id": source_id,
+                "neo4j_written": bool(result.get("entities_found")),
+            }
+
+        record_ingestion_attempt(
+            log,
+            rel,
+            file_hash,
+            collection=collection,
+            source_id=source_id,
+            status="no_chunks",
+        )
+        await save_log(log)
+        return {
+            "status": "empty",
+            "chunks_created": 0,
+            "entities_found": {},
+            "pipeline": CURRENT_PIPELINE,
+            "path": str(path),
+            "rel_path": rel,
+        }
+    finally:
+        ingestor.close()
+        await qdrant.close()

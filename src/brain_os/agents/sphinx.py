@@ -8,6 +8,7 @@ clarification tools.
 
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Any
 
@@ -79,8 +80,12 @@ class Sphinx(BaseAgent):
         text via the ReAct loop), this method returns a validated Pydantic
         model suitable for programmatic branching.
         """
+        await self._ensure_llm()
+        system_prompt = self._compose_system_prompt(_SYSTEM_PROMPT)
+        if inspect.isawaitable(system_prompt):
+            system_prompt = await system_prompt
         return await self._llm.generate_structured(
-            self._compose_system_prompt(_SYSTEM_PROMPT),
+            str(system_prompt),
             (
                 f"Assess whether this request is clear enough to act on: {query}\n\n"
                 "If it IS clear, set clear=true. "

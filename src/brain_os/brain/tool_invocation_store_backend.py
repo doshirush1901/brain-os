@@ -148,7 +148,7 @@ class SqliteToolInvocationStoreBackend(ToolInvocationStoreBackend):
         try:
             await self._db.execute("DELETE FROM tool_invocations WHERE ts < ?", (cutoff,))
             await self._db.commit()
-        except aiosqlite.Error as exc:
+        except aiosqlite.Error:
             logger.debug("tool_invocations retention prune failed", exc_info=True)
         max_rows = int(cfg.gepa_tool_invocations_max_rows)
         if max_rows <= 0:
@@ -158,7 +158,7 @@ class SqliteToolInvocationStoreBackend(ToolInvocationStoreBackend):
             row = await cur.fetchone()
             await cur.close()
             n = int(row[0]) if row and row[0] is not None else 0
-        except aiosqlite.Error as exc:
+        except aiosqlite.Error:
             logger.debug("tool_invocations count failed", exc_info=True)
             return
         excess = n - max_rows
@@ -174,7 +174,7 @@ class SqliteToolInvocationStoreBackend(ToolInvocationStoreBackend):
                 (excess,),
             )
             await self._db.commit()
-        except aiosqlite.Error as exc:
+        except aiosqlite.Error:
             logger.debug("tool_invocations max_rows prune failed", exc_info=True)
 
     async def aggregate_pairs(
@@ -195,6 +195,7 @@ class SqliteToolInvocationStoreBackend(ToolInvocationStoreBackend):
                    COUNT(*) AS total
             FROM tool_invocations
             WHERE ts >= ?
+              AND (run_id IS NULL OR run_id NOT LIKE 'seed-%')
             GROUP BY agent, tool
             HAVING total >= ?
             """,
@@ -322,14 +323,14 @@ class PgToolInvocationStoreBackend(ToolInvocationStoreBackend):
         cutoff = _store_mod.time.time() - float(cfg.gepa_tool_invocations_retention_days) * 86400.0
         try:
             await self._repo.delete_before_ts(cutoff)
-        except (DatabaseError, OSError, RuntimeError) as exc:
+        except (DatabaseError, OSError, RuntimeError):
             logger.debug("tool_invocations PG retention prune failed", exc_info=True)
         max_rows = int(cfg.gepa_tool_invocations_max_rows)
         if max_rows <= 0:
             return
         try:
             await self._repo.trim_to_max_rows(max_rows)
-        except (DatabaseError, OSError, RuntimeError) as exc:
+        except (DatabaseError, OSError, RuntimeError):
             logger.debug("tool_invocations PG max_rows prune failed", exc_info=True)
 
     async def aggregate_pairs(

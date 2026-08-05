@@ -74,7 +74,7 @@ async def pick_intent_via_embedding(
 
     try:
         qvec = await embeddings.embed_query(query)
-    except (LLMError, OSError, ValueError, TypeError) as exc:
+    except (LLMError, OSError, ValueError, TypeError):
         logger.warning("Embedding tie-break: query embed failed", exc_info=True)
         return None, {**detail, "error": "query_embed"}
 
@@ -86,7 +86,7 @@ async def pick_intent_via_embedding(
         if cached is None:
             try:
                 batch = await embeddings.embed_texts([txt])
-            except (LLMError, OSError, ValueError, TypeError) as exc:
+            except (LLMError, OSError, ValueError, TypeError):
                 logger.warning(
                     "Embedding tie-break: anchor embed failed for %s", key, exc_info=True
                 )

@@ -12,6 +12,7 @@ from brain_os.config import get_settings
 from brain_os.schemas.run_record import (
     _SUMMARY_INPUT_MAX,
     _SUMMARY_RESPONSE_MAX,
+    BranchTelemetry,
     CostEstimate,
     DelegationHop,
     EvidenceRef,
@@ -29,6 +30,103 @@ from brain_os.systems.llm_budget import estimate_turn_tokens
 logger = logging.getLogger(__name__)
 
 _EMAIL_TOOLS = frozenset({"search_emails", "read_email_thread"})
+
+_FAST_MEMORY_ROUTES = frozenset(
+    {"fast_path", "truth_hints", "quick_pipeline", "operator_deterministic"}
+)
+_LEAN_ROUTE_METHODS = _FAST_MEMORY_ROUTES | frozenset(
+    {"deterministic", "procedural", "intent", "sphinx"}
+)
+
+
+def _derive_branch_telemetry(
+    *,
+    trace: dict[str, Any],
+    meta: dict[str, Any],
+    route_method: str,
+    early_exit: str | None,
+) -> BranchTelemetry:
+    """Infer Letta-spike branch fields from pipeline trace (no new pipeline hooks required)."""
+    route = (route_method or "").strip().lower()
+    early = (early_exit or "").strip().lower()
+
+    fast_memory_path = route in _FAST_MEMORY_ROUTES or early in (
+        "fast_path",
+        "quick_pipeline",
+        "truth_hints",
+    )
+
+    if early:
+        perceive_class = early
+    elif route in _FAST_MEMORY_ROUTES:
+        perceive_class = "simple"
+    elif route in ("llm", "athena"):
+        perceive_class = "complex"
+    else:
+        perceive_class = route or "standard"
+
+    route_skip = bool(route) and route in _LEAN_ROUTE_METHODS and route not in ("llm", "athena")
+
+    confidence_raw = trace.get("confidence")
+    memory_confidence: float | None = None
+    if confidence_raw is not None:
+        try:
+            memory_confidence = float(confidence_raw)
+        except (TypeError, ValueError):
+            memory_confidence = None
+
+    transitions_raw = trace.get("transitions")
+    post_remember_node: str | None = None
+    if isinstance(transitions_raw, dict):
+        post_row = transitions_raw.get("post_remember")
+        if isinstance(post_row, dict):
+            post_remember_node = (
+                str(post_row.get("next_node") or post_row.get("route_method") or "") or None
+            )
+
+    bypass_raw = trace.get("bypass_cheap_exits")
+    if bypass_raw is None and isinstance(meta.get("remember"), dict):
+        bypass_raw = meta["remember"].get("bypass_cheap_exits")
+    bypass_cheap_exits = bool(bypass_raw) if bypass_raw is not None else None
+
+    domain_match_raw = trace.get("domain_match")
+    domain_match: float | None = None
+    if domain_match_raw is not None:
+        try:
+            domain_match = float(domain_match_raw)
+        except (TypeError, ValueError):
+            domain_match = None
+
+    return BranchTelemetry(
+        perceive_class=perceive_class[:64],
+        fast_memory_path=fast_memory_path,
+        memory_confidence=memory_confidence,
+        domain_match=domain_match,
+        route_skip=route_skip,
+        bypass_cheap_exits=bypass_cheap_exits,
+        post_remember_node=post_remember_node,
+        branch_source="derived",
+    )
+
+
+def _merge_branch_telemetry(
+    *,
+    trace: dict[str, Any],
+    meta: dict[str, Any],
+    route_method: str,
+    early_exit: str | None,
+) -> BranchTelemetry | None:
+    derived = _derive_branch_telemetry(
+        trace=trace,
+        meta=meta,
+        route_method=route_method,
+        early_exit=early_exit,
+    )
+    explicit = trace.get("branch_telemetry")
+    if not isinstance(explicit, dict):
+        return derived
+    merged = {**derived.model_dump(), **explicit, "branch_source": "explicit"}
+    return BranchTelemetry.model_validate(merged)
 
 
 @dataclass
@@ -223,6 +321,13 @@ async def assemble_from_pipeline(ctx: RunRecordAssemblyContext) -> RunRecord:
 
     sender = _redact_identifier(ctx.sender_id, prefix="sender")
 
+    branch_telemetry = _merge_branch_telemetry(
+        trace=trace,
+        meta=meta,
+        route_method=route_method,
+        early_exit=early_exit,
+    )
+
     return RunRecord(
         run_id=ctx.run_id,
         ts_start=float(ctx.ts_start),
@@ -254,4 +359,5 @@ async def assemble_from_pipeline(ctx: RunRecordAssemblyContext) -> RunRecord:
         cost_estimate=CostEstimate(tokens_heuristic=tokens),
         artifacts=artifacts,
         transitions=transitions,
+        branch_telemetry=branch_telemetry,
     )

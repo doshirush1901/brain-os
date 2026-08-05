@@ -186,8 +186,28 @@ async def run_guardrails_checks(
             logger.warning(
                 "GUARDRAILS | fail-closed triggered; response replaced with safe fallback",
             )
-    except Exception:
-        logger.warning("Guardrails checks failed (non-critical)", exc_info=True)
+    except Exception as exc:  # noqa: BLE001 — guardrail outer failure routes to the fail-closed decision
+        logger.warning("Guardrails checks failed (outer)", exc_info=True)
+        trace["guardrails_check_error"] = str(exc) or type(exc).__name__
+        # Mirror the Aegis/Aletheia/Mnemon pattern in execute.py: an
+        # unexpected failure here must not silently ship an unchecked
+        # response when the operator has fail-closed guardrails.
+        try:
+            from brain_os.brain.guardrails import (
+                _guardrails_fail_closed as _outer_guardrails_fail_closed,
+            )
+
+            fail_closed = _outer_guardrails_fail_closed()
+        except Exception:  # noqa: BLE001 — fail-closed default when the guardrail policy cannot be read
+            fail_closed = True
+        if fail_closed and not uncensored_turn:
+            raw_response = (
+                "I can't provide that response safely. "
+                "Please rephrase your request for a policy-compliant summary."
+            )
+            logger.warning(
+                "GUARDRAILS | outer exception + fail-closed — response replaced with safe fallback",
+            )
 
     return raw_response
 
@@ -278,7 +298,7 @@ async def run_assessment_step(
                 extra = format_conflict_notes_for_confidence_prefix(conflicts)
                 if extra:
                     confidence_prefix += extra
-    except Exception:
+    except Exception:  # noqa: BLE001 — metacognition assessment is optional; response still returns
         logger.exception("Metacognition assessment failed")
     return raw_response, confidence_prefix, confidence_value
 
@@ -328,11 +348,11 @@ async def run_faithfulness_gate(
             limit=6,
         )
         trace["shared_kb_hits"] = len(shared_kb_evidence)
-        merge_retriever_health_into_trace(
-            trace,
-            getattr(retriever, "_last_search_health", None),
-        )
-    except Exception:
+        from brain_os.brain.retrieval_context import get_last_search_health
+
+        health = get_last_search_health() or getattr(retriever, "_last_search_health", None)
+        merge_retriever_health_into_trace(trace, health)
+    except Exception:  # noqa: BLE001 — shared KB retrieval failure marks the trace degraded
         logger.warning(
             "Shared KB retrieval for faithfulness/metacognition failed",
             exc_info=True,
@@ -396,10 +416,19 @@ async def run_faithfulness_gate(
                     app_cfg.faithfulness_hard_threshold,
                 )
                 try:
+                    from brain_os.immune.registry import record_trigger
+
+                    record_trigger(
+                        "faithfulness_check",
+                        {"score": faith_score, "outcome": "hard_block"},
+                    )
+                except Exception:  # noqa: BLE001 — immune bookkeeping only
+                    logger.debug("immune record_trigger failed for faithfulness", exc_info=True)
+                try:
                     from brain_os.memory.dream_triggers import bump_event
 
                     await asyncio.to_thread(bump_event, "faithfulness_block")
-                except Exception:
+                except Exception:  # noqa: BLE001 — dream trigger bump is best-effort
                     logger.debug("dream_triggers bump failed", exc_info=True)
             elif faith_score < app_cfg.faithfulness_threshold or (
                 faith_score < app_cfg.faithfulness_hard_threshold and agents_did_real_work
@@ -412,6 +441,15 @@ async def run_faithfulness_gate(
                     faith_score,
                     app_cfg.faithfulness_threshold,
                 )
+                try:
+                    from brain_os.immune.registry import record_trigger
+
+                    record_trigger(
+                        "faithfulness_check",
+                        {"score": faith_score, "outcome": "caveat"},
+                    )
+                except Exception:  # noqa: BLE001 — immune bookkeeping only
+                    logger.debug("immune record_trigger failed for faithfulness", exc_info=True)
             if getattr(app_cfg, "citation_aligner_enabled", False):
                 response_strip = (raw_response or "").strip()
                 if response_strip and raw_response != STRICT_VERIFICATION_BLOCKED:
@@ -430,7 +468,7 @@ async def run_faithfulness_gate(
                             raw_response,
                             ev_rows,
                         )
-                    except Exception:
+                    except Exception:  # noqa: BLE001 — citation alignment is optional post-processing
                         logger.debug("citation_alignment failed", exc_info=True)
         else:
             trace["faithfulness"] = 0.0
@@ -439,7 +477,13 @@ async def run_faithfulness_gate(
             trace["partial_verification"] = True
             trace["uncertainty_contract"] = "no_evidence"
             logger.warning("FAITHFULNESS | no evidence docs available — caveat appended")
-    except Exception:
+            try:
+                from brain_os.immune.registry import record_trigger
+
+                record_trigger("faithfulness_check", {"score": 0.0, "outcome": "no_docs"})
+            except Exception:  # noqa: BLE001 — immune bookkeeping only
+                logger.debug("immune record_trigger failed for faithfulness", exc_info=True)
+    except Exception:  # noqa: BLE001 — faithfulness failure routes to the strict-verification decision
         try:
             from brain_os.config import get_settings as _gf_err
 
@@ -449,7 +493,7 @@ async def run_faithfulness_gate(
             ) == "strict" and faithfulness_strict_intent_fn(
                 agents_used, resolved_input, channel=channel
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 — strict-intent lookup defaults to non-strict
             strict_on_error = False
 
         if strict_on_error and not uncensored_turn:
@@ -505,6 +549,7 @@ async def run_validate_safety_chain(
         agents_used,
         aletheia=aletheia,
         logger=logger,
+        trace=trace,
     )
     had_provenance = had_provenance or step_prov
     steps.append("aletheia")
@@ -517,6 +562,7 @@ async def run_validate_safety_chain(
         agents_used,
         aegis=aegis,
         logger=logger,
+        trace=trace,
     )
     had_dlp = had_dlp or step_dlp
     steps.append("aegis")
@@ -529,6 +575,7 @@ async def run_validate_safety_chain(
         agents_used,
         mnemon=mnemon,
         logger=logger,
+        trace=trace,
     )
     steps.append("mnemon")
 
@@ -561,6 +608,7 @@ async def run_validate_safety_chain(
             logger=logger,
             post_gapper=True,
             append_agent=False,
+            trace=trace,
         )
         had_dlp = had_dlp or step_dlp_post
         steps.append("aegis_post_gapper")

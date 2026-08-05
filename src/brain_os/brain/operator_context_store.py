@@ -1,4 +1,4 @@
-"""SQLite persistence for operator context runs (brief / Tinder / quote prep)."""
+"""Operator context backends: SQLite (default), Postgres dual-write."""
 
 from __future__ import annotations
 
@@ -6,12 +6,19 @@ import json
 import logging
 import time
 import uuid
+from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
 import aiosqlite
 
 from brain_os.config import get_settings
+from brain_os.data.crm import CRMDatabase
+from brain_os.data.operator_context_pg import (
+    OperatorContextRunModel,
+    PgOperatorContextRepository,
+)
+from brain_os.exceptions import DatabaseError
 from brain_os.schemas.operator_context import (
     ContextPrecedent,
     OperatorContextKind,
@@ -42,7 +49,71 @@ def operator_context_enabled() -> bool:
     return bool(get_settings().app.operator_context_enabled)
 
 
-class OperatorContextStore:
+class OperatorContextStore(ABC):
+    """Persistence for :class:`~brain_os.schemas.operator_context.OperatorContextRun`."""
+
+    @abstractmethod
+    async def initialize(self) -> None: ...
+
+    @abstractmethod
+    async def close(self) -> None: ...
+
+    @abstractmethod
+    async def save(self, record: OperatorContextRun) -> None: ...
+
+    @abstractmethod
+    async def get(self, run_id: str) -> OperatorContextRun | None: ...
+
+    @abstractmethod
+    async def list_precedents(
+        self,
+        *,
+        company_key: str,
+        domain: str | None = None,
+        machine_model: str | None = None,
+        exclude_run_id: str | None = None,
+        limit: int = 5,
+    ) -> list[ContextPrecedent]: ...
+
+    @abstractmethod
+    async def get_recent_account_brief(
+        self,
+        company_key: str,
+        *,
+        max_age_hours: float,
+        contact_email: str | None = None,
+    ) -> OperatorContextRun | None: ...
+
+    @abstractmethod
+    async def mark_success(
+        self,
+        run_id: str,
+        *,
+        outcome: OperatorContextOutcome | None = None,
+        success: bool = True,
+    ) -> bool: ...
+
+    @abstractmethod
+    async def list_all_runs(
+        self,
+        *,
+        since_ts: float | None = None,
+        limit: int | None = None,
+    ) -> list[OperatorContextRun]: ...
+
+    @abstractmethod
+    async def count_runs(self, *, since_ts: float | None = None) -> int: ...
+
+    @abstractmethod
+    async def latest_run_id_for_company(
+        self,
+        company_key: str,
+        *,
+        kind: OperatorContextKind | None = None,
+    ) -> str | None: ...
+
+
+class SqliteOperatorContextStore(OperatorContextStore):
     """SQLite store for :class:`~brain_os.schemas.operator_context.OperatorContextRun`."""
 
     def __init__(self, *, db_path: Path | None = None) -> None:
@@ -408,3 +479,339 @@ class OperatorContextStore:
 
 def new_operator_context_run_id() -> str:
     return f"opctx-{uuid.uuid4().hex[:16]}"
+
+
+class PgOperatorContextStore(OperatorContextStore):
+    def __init__(self, repo: PgOperatorContextRepository | None = None) -> None:
+        if repo is None:
+            repo = PgOperatorContextRepository(CRMDatabase().session_factory)
+        self._repo = repo
+        self._initialized = False
+
+    async def initialize(self) -> None:
+        if self._initialized:
+            return
+        await ensure_operator_context_tables()
+        self._initialized = True
+
+    async def close(self) -> None:
+        self._initialized = False
+
+    async def save(self, record: OperatorContextRun) -> None:
+        if not self._initialized:
+            await self.initialize()
+        payload = json.dumps(record.model_dump(mode="json"), default=str)
+        if record.success is None:
+            success_val = None
+        else:
+            success_val = 1 if record.success else 0
+        await self._repo.upsert(
+            run_id=record.run_id[:128],
+            ts=float(record.ts),
+            company_key=record.company_key[:256],
+            domain=(record.domain or "")[:128] or None,
+            kind=record.kind[:32],
+            machine_model=(record.machine_model or "")[:128] or None,
+            outcome=record.outcome[:32],
+            success=success_val,
+            payload_json=payload,
+        )
+
+    async def get(self, run_id: str) -> OperatorContextRun | None:
+        if not self._initialized:
+            await self.initialize()
+        rid = (run_id or "").strip()
+        if not rid:
+            return None
+        raw = await self._repo.get_payload(rid[:128])
+        if not raw:
+            return None
+        try:
+            return OperatorContextRun.model_validate(json.loads(raw))
+        except (json.JSONDecodeError, ValueError, TypeError):
+            logger.debug("operator_context pg get: invalid payload for %s", rid, exc_info=True)
+            return None
+
+    async def list_precedents(
+        self,
+        *,
+        company_key: str,
+        domain: str | None = None,
+        machine_model: str | None = None,
+        exclude_run_id: str | None = None,
+        limit: int = 5,
+    ) -> list[ContextPrecedent]:
+        if not self._initialized:
+            await self.initialize()
+        lim = max(1, min(int(limit), 20))
+        exclude = (exclude_run_id or "").strip()[:128]
+        seen: set[str] = set()
+        out: list[ContextPrecedent] = []
+
+        async def _load(where_clauses: list[Any], match_reason: str) -> None:
+            nonlocal out
+            if len(out) >= lim:
+                return
+            payloads = await self._repo.list_payloads(
+                where_clauses=where_clauses, order_desc=True, limit=lim * 3
+            )
+            for raw in payloads:
+                if len(out) >= lim:
+                    break
+                try:
+                    rec = OperatorContextRun.model_validate(json.loads(raw))
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    continue
+                if rec.run_id in seen or (exclude and rec.run_id == exclude):
+                    continue
+                seen.add(rec.run_id)
+                out.append(
+                    ContextPrecedent(
+                        run_id=rec.run_id,
+                        kind=rec.kind,
+                        ts=rec.ts,
+                        company_name=rec.company_name,
+                        outcome=rec.outcome,
+                        success=rec.success,
+                        machine_model=rec.machine_model,
+                        crm_stage=rec.crm_stage,
+                        summary=rec.summary,
+                        match_reason=match_reason,
+                    )
+                )
+
+        ck = (company_key or "").strip()
+        if ck:
+            await _load([OperatorContextRunModel.company_key == ck], "same_company")
+        dom = (domain or "").strip().lower()
+        if dom and len(out) < lim:
+            await _load(
+                [
+                    OperatorContextRunModel.domain == dom,
+                    OperatorContextRunModel.company_key != (ck or "__none__"),
+                ],
+                "same_domain",
+            )
+        model = (machine_model or "").strip()
+        if model and len(out) < lim:
+            await _load(
+                [
+                    OperatorContextRunModel.machine_model == model,
+                    OperatorContextRunModel.company_key != (ck or "__none__"),
+                ],
+                "same_machine_model",
+            )
+
+        def _sort_key(p: ContextPrecedent) -> tuple[int, float]:
+            success_rank = 0 if p.success is True else (1 if p.success is None else 2)
+            return (success_rank, -p.ts)
+
+        out.sort(key=_sort_key)
+        return out[:lim]
+
+    async def get_recent_account_brief(
+        self,
+        company_key: str,
+        *,
+        max_age_hours: float,
+        contact_email: str | None = None,
+    ) -> OperatorContextRun | None:
+        if max_age_hours <= 0:
+            return None
+        if not self._initialized:
+            await self.initialize()
+        ck = (company_key or "").strip()
+        if not ck:
+            return None
+        cutoff = time.time() - max_age_hours * 3600.0
+        payloads = await self._repo.list_payloads(
+            where_clauses=[
+                OperatorContextRunModel.company_key == ck[:256],
+                OperatorContextRunModel.kind == "account_brief",
+                OperatorContextRunModel.ts >= cutoff,
+            ],
+            order_desc=True,
+            limit=20,
+        )
+        want_contact = (contact_email or "").strip().lower()
+        for raw in payloads:
+            try:
+                rec = OperatorContextRun.model_validate(json.loads(raw))
+            except (json.JSONDecodeError, ValueError, TypeError):
+                continue
+            if not rec.brief_snapshot:
+                continue
+            if want_contact and rec.contact_email:
+                stored = str(rec.contact_email)
+                if stored.startswith("redacted:"):
+                    pass
+                elif stored.lower() != want_contact:
+                    continue
+            return rec
+        return None
+
+    async def mark_success(
+        self,
+        run_id: str,
+        *,
+        outcome: OperatorContextOutcome | None = None,
+        success: bool = True,
+    ) -> bool:
+        record = await self.get(run_id)
+        if record is None:
+            return False
+        updates: dict[str, Any] = {"success": success}
+        if outcome:
+            updates["outcome"] = outcome
+        await self.save(record.model_copy(update=updates))
+        return True
+
+    async def list_all_runs(
+        self,
+        *,
+        since_ts: float | None = None,
+        limit: int | None = None,
+    ) -> list[OperatorContextRun]:
+        if not self._initialized:
+            await self.initialize()
+        clauses: list[Any] = []
+        if since_ts is not None:
+            clauses.append(OperatorContextRunModel.ts >= float(since_ts))
+        lim = None if limit is None else max(1, min(int(limit), 100_000))
+        payloads = await self._repo.list_payloads(
+            where_clauses=clauses, order_desc=False, limit=lim
+        )
+        out: list[OperatorContextRun] = []
+        for raw in payloads:
+            try:
+                out.append(OperatorContextRun.model_validate(json.loads(raw)))
+            except (json.JSONDecodeError, ValueError, TypeError):
+                continue
+        return out
+
+    async def count_runs(self, *, since_ts: float | None = None) -> int:
+        if not self._initialized:
+            await self.initialize()
+        return await self._repo.count_runs(since_ts=since_ts)
+
+    async def latest_run_id_for_company(
+        self,
+        company_key: str,
+        *,
+        kind: OperatorContextKind | None = None,
+    ) -> str | None:
+        if not self._initialized:
+            await self.initialize()
+        ck = (company_key or "").strip()
+        if not ck:
+            return None
+        return await self._repo.latest_run_id(ck, kind=kind[:32] if kind else None)
+
+
+class DualWriteOperatorContextStore(OperatorContextStore):
+    def __init__(self, sqlite: SqliteOperatorContextStore, pg: PgOperatorContextStore) -> None:
+        self._sqlite = sqlite
+        self._pg = pg
+
+    def _read(self) -> OperatorContextStore:
+        if getattr(get_settings().app, "pg_store_operator_context_read", False):
+            return self._pg
+        return self._sqlite
+
+    async def initialize(self) -> None:
+        await self._sqlite.initialize()
+        try:
+            await self._pg.initialize()
+        except (DatabaseError, OSError, RuntimeError):
+            logger.warning("Postgres operator_context table init failed", exc_info=True)
+
+    async def close(self) -> None:
+        await self._sqlite.close()
+        await self._pg.close()
+
+    async def save(self, record: OperatorContextRun) -> None:
+        await self._sqlite.save(record)
+        try:
+            await self._pg.save(record)
+        except (DatabaseError, OSError, RuntimeError):
+            logger.warning("Postgres operator_context shadow-write failed", exc_info=True)
+
+    async def get(self, run_id: str) -> OperatorContextRun | None:
+        return await self._read().get(run_id)
+
+    async def list_precedents(
+        self,
+        *,
+        company_key: str,
+        domain: str | None = None,
+        machine_model: str | None = None,
+        exclude_run_id: str | None = None,
+        limit: int = 5,
+    ) -> list[ContextPrecedent]:
+        return await self._read().list_precedents(
+            company_key=company_key,
+            domain=domain,
+            machine_model=machine_model,
+            exclude_run_id=exclude_run_id,
+            limit=limit,
+        )
+
+    async def get_recent_account_brief(
+        self,
+        company_key: str,
+        *,
+        max_age_hours: float,
+        contact_email: str | None = None,
+    ) -> OperatorContextRun | None:
+        return await self._read().get_recent_account_brief(
+            company_key, max_age_hours=max_age_hours, contact_email=contact_email
+        )
+
+    async def mark_success(
+        self,
+        run_id: str,
+        *,
+        outcome: OperatorContextOutcome | None = None,
+        success: bool = True,
+    ) -> bool:
+        ok = await self._sqlite.mark_success(run_id, outcome=outcome, success=success)
+        if ok:
+            try:
+                await self._pg.mark_success(run_id, outcome=outcome, success=success)
+            except (DatabaseError, OSError, RuntimeError):
+                logger.warning("Postgres operator_context mark_success failed", exc_info=True)
+        return ok
+
+    async def list_all_runs(
+        self,
+        *,
+        since_ts: float | None = None,
+        limit: int | None = None,
+    ) -> list[OperatorContextRun]:
+        return await self._read().list_all_runs(since_ts=since_ts, limit=limit)
+
+    async def count_runs(self, *, since_ts: float | None = None) -> int:
+        return await self._read().count_runs(since_ts=since_ts)
+
+    async def latest_run_id_for_company(
+        self,
+        company_key: str,
+        *,
+        kind: OperatorContextKind | None = None,
+    ) -> str | None:
+        return await self._read().latest_run_id_for_company(company_key, kind=kind)
+
+
+def build_operator_context_store(*, db_path: Path | None = None) -> OperatorContextStore:
+    sqlite = SqliteOperatorContextStore(db_path=db_path)
+    if not getattr(get_settings().app, "pg_store_operator_context_enabled", False):
+        return sqlite
+    return DualWriteOperatorContextStore(sqlite, PgOperatorContextStore())
+
+
+async def ensure_operator_context_tables() -> None:
+    crm = CRMDatabase()
+    async with crm._engine.begin() as conn:
+        await conn.run_sync(
+            lambda sync_conn: OperatorContextRunModel.__table__.create(sync_conn, checkfirst=True)
+        )

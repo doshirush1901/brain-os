@@ -113,8 +113,17 @@ class Mnemosyne(BaseAgent):
 
     async def _tool_store_long_term(self, content: str, user_id: str = "global") -> str:
         mem = self._services["long_term_memory"]
-        result = await mem.store(content, user_id=user_id)
-        return f"Stored successfully. ({len(result)} memory entries affected)"
+        gated = await mem.store_gated(
+            content,
+            user_id=user_id,
+            source="mnemosyne:store_long_term",
+            category="session",
+            metadata={"type": "fact", "memory_category": "session"},
+        )
+        if gated.get("skipped"):
+            return f"Not stored ({gated.get('reason', 'policy')})."
+        entries = gated.get("entries") or []
+        return f"Stored successfully. ({len(entries)} memory entries affected)"
 
     async def _tool_get_episodic_memory(self, query: str) -> str:
         episodic = self._services.get("episodic_memory")

@@ -43,6 +43,27 @@ async def verify_outbound_draft(
     if aletheia_block and aletheia_block.get("verdict") == "UNVERIFIED":
         blocked = blocked or len(aletheia_block.get("unverifiable") or []) >= 2
 
+    if blocked or (
+        aletheia_block
+        and (
+            aletheia_block.get("unverifiable")
+            or aletheia_block.get("verdict") in {"UNVERIFIED", "BLOCK", "REVIEW"}
+        )
+    ):
+        try:
+            from brain_os.immune.registry import record_trigger
+
+            record_trigger(
+                "aletheia_provenance",
+                {
+                    "outbound": True,
+                    "blocked": blocked,
+                    "verdict": (aletheia_block or {}).get("verdict"),
+                },
+            )
+        except Exception:
+            logger.debug("immune record_trigger failed for aletheia outbound", exc_info=True)
+
     return {
         "ok": not blocked,
         "blocked": blocked,
