@@ -36,7 +36,7 @@ brain = "brain_os.interfaces.cli:app"
 brain-mcp = "brain_os.interfaces.mcp_server:main"
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^8.0"
+pytest = ">=8,<10"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
